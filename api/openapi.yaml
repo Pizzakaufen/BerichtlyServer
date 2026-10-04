@@ -1,0 +1,610 @@
+openapi: 3.0.3
+info:
+  title: Berichtly Server API
+  version: 1.0.0-alpha
+  description: |
+    REST-API des Berichtly Servers (Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App).
+
+    **Konventionen**
+    - Alle Endpunkte liegen unter `/api/v1`. Inkompatible Änderungen erscheinen später unter `/api/v2`.
+    - Erfolgreiche Antworten: `{"data": ...}`, Listen zusätzlich `{"meta": {page, limit, total, hasMore}}`.
+    - Fehler: `{"error": {"code", "message", "requestId", "details", "conflict"}}` mit stabilem, maschinenlesbarem `code`.
+    - Zeitpunkte: UTC, ISO-8601 mit Millisekunden (`2026-10-05T08:15:00.000Z`). Kalenderdaten: `YYYY-MM-DD`,
+      interpretiert in der Zeitzone des Benutzers.
+    - IDs sind UUIDs. Clients dürfen beim Erstellen eigene UUIDs vergeben (idempotente Wiederholung).
+    - Jede Antwort enthält `X-Request-ID`; ein gültiger Wert des Clients (8–64 Zeichen `[A-Za-z0-9_-]`) wird übernommen.
+    - Unbekannte Felder in Anfragen werden ignoriert.
+
+    **Authentifizierung**: `Authorization: Bearer <accessToken>`. Access Tokens gelten standardmäßig 15 Minuten.
+    Refresh Tokens werden bei jeder Erneuerung ausgetauscht; die erneute Verwendung eines alten Refresh Tokens
+    beendet die Sitzung.
+
+    **Optimistische Sperre**: Ändern und Löschen benötigen die Version, auf der die Änderung basiert. Weicht die
+    Serverversion ab, antwortet der Server mit `409 CONFLICT` und dem aktuellen Serverstand – es wird nichts überschrieben.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: System
+  - name: Auth
+  - name: Konto
+  - name: Profil
+  - name: Tagesberichte
+  - name: Wochenberichte
+  - name: Wochen
+  - name: Synchronisierung
+  - name: Geräte
+
+paths:
+  /api/v1/health:
+    get:
+      tags: [System]
+      summary: Health-Check (Server und Datenbank)
+      security: []
+      responses:
+        "200": { description: Gesund, content: { application/json: { schema: { $ref: "#/components/schemas/HealthResponse" } } } }
+        "503": { description: Datenbank nicht erreichbar, content: { application/json: { schema: { $ref: "#/components/schemas/HealthResponse" } } } }
+  /api/v1/health/live:
+    get:
+      tags: [System]
+      summary: Liveness (Prozess antwortet, ohne Datenbankprüfung)
+      security: []
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/HealthResponse" } } } }
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Konto registrieren
+      description: Rate-limitiert. Abschaltbar mit `REGISTRATION_ENABLED=false`.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RegisterRequest" } } } }
+      responses:
+        "201": { description: Konto angelegt, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Anmelden
+      description: Rate-limitiert; nach zu vielen Fehlversuchen wird das Konto vorübergehend gesperrt (`ACCOUNT_TEMPORARILY_LOCKED`).
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
+      responses:
+        "200": { description: Angemeldet, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Token-Paar erneuern (Refresh Token wird ausgetauscht)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string, example: "brt_..." } } }
+      responses:
+        "200": { description: Neues Token-Paar, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Aktuelle Sitzung beenden (Access und Refresh Token werden sofort ungültig)
+      responses:
+        "204": { description: Abgemeldet }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/account:
+    get:
+      tags: [Konto]
+      summary: Eigenes Konto abrufen
+      responses:
+        "200": { description: Konto, content: { application/json: { schema: { $ref: "#/components/schemas/AccountEnvelope" } } } }
+    patch:
+      tags: [Konto]
+      summary: Kontoeinstellungen ändern (Zeitzone)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { timezone: { type: string, example: Europe/Berlin } } } } }
+      responses:
+        "200": { description: Konto, content: { application/json: { schema: { $ref: "#/components/schemas/AccountEnvelope" } } } }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /api/v1/profile:
+    get:
+      tags: [Profil]
+      summary: Eigenes Profil abrufen
+      responses:
+        "200": { description: Profil, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileEnvelope" } } } }
+    put:
+      tags: [Profil]
+      summary: Eigenes Profil ersetzen (mit Basisversion)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileRequest" } } } }
+      responses:
+        "200": { description: Profil, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileEnvelope" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /api/v1/daily-reports:
+    get:
+      tags: [Tagesberichte]
+      summary: Eigene Tagesberichte auflisten (gefiltert, paginiert)
+      parameters:
+        - { name: date, in: query, schema: { type: string, format: date } }
+        - { name: from, in: query, schema: { type: string, format: date }, description: inklusive }
+        - { name: to, in: query, schema: { type: string, format: date }, description: inklusive }
+        - { name: status, in: query, schema: { type: string }, description: "Kommagetrennt, z. B. DRAFT,EDITED" }
+        - { name: sort, in: query, schema: { type: string, enum: [date_desc, date_asc], default: date_desc } }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DailyReport" } }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [Tagesberichte]
+      summary: Tagesbericht erstellen
+      description: |
+        Optional mit Client-`id`. Existiert die ID bereits mit identischem Inhalt, antwortet der Server mit `200`
+        (idempotente Wiederholung), bei anderem Inhalt mit `409` (`ALREADY_EXISTS`).
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportRequest" } } } }
+      responses:
+        "201": { description: Erstellt, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
+        "200": { description: Bereits identisch vorhanden, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /api/v1/daily-reports/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Tagesberichte]
+      summary: Tagesbericht abrufen
+      responses:
+        "200": { description: Bericht, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [Tagesberichte]
+      summary: Tagesbericht ersetzen (Feld `version` = Basisversion, Pflicht)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportRequest" } } } }
+      responses:
+        "200": { description: Aktualisiert, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Tagesberichte]
+      summary: Tagesbericht löschen (Soft-Delete/Tombstone, idempotent)
+      parameters: [{ $ref: "#/components/parameters/Version" }]
+      responses:
+        "204": { description: Gelöscht }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/weekly-reports:
+    get:
+      tags: [Wochenberichte]
+      summary: Eigene Wochenberichte auflisten
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date }, description: Wochen, die den Zeitraum überschneiden }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [date_desc, date_asc] } }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/WeeklyReport" } }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+    post:
+      tags: [Wochenberichte]
+      summary: Wochenbericht erstellen (ein aktiver Bericht pro Woche)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportRequest" } } } }
+      responses:
+        "201": { description: Erstellt, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
+        "200": { description: Bereits identisch vorhanden, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /api/v1/weekly-reports/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Wochenberichte]
+      summary: Wochenbericht abrufen
+      responses:
+        "200": { description: Bericht, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [Wochenberichte]
+      summary: Wochenbericht ersetzen (Feld `version` Pflicht)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportRequest" } } } }
+      responses:
+        "200": { description: Aktualisiert, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Wochenberichte]
+      summary: Wochenbericht löschen (Soft-Delete/Tombstone)
+      parameters: [{ $ref: "#/components/parameters/Version" }]
+      responses:
+        "204": { description: Gelöscht }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/weeks/current:
+    get:
+      tags: [Wochen]
+      summary: Aktuelle Woche (Montag–Sonntag) in der Zeitzone des Benutzers
+      responses:
+        "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
+  /api/v1/weeks/{date}:
+    get:
+      tags: [Wochen]
+      summary: Woche (Montag–Sonntag), die das Datum enthält
+      parameters: [{ name: date, in: path, required: true, schema: { type: string, format: date } }]
+      responses:
+        "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /api/v1/sync/changes:
+    get:
+      tags: [Synchronisierung]
+      summary: Änderungen seit einem Cursor abrufen (inklusive Tombstones)
+      parameters:
+        - { name: cursor, in: query, schema: { type: string, default: "0" }, description: "`nextCursor` des letzten Abrufs; 0 = alles" }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+      responses:
+        "200": { description: Änderungen, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncPullResponse" } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/sync/push:
+    post:
+      tags: [Synchronisierung]
+      summary: Lokale Änderungen hochladen (max. 100 pro Anfrage, jede einzeln verarbeitet)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SyncPushRequest" } } } }
+      responses:
+        "200": { description: Ergebnis pro Änderung, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncPushResponse" } } } } } }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /api/v1/sync/status:
+    get:
+      tags: [Synchronisierung]
+      summary: Synchronisationsstand (Server-Cursor, letzter Pull/Push dieses Geräts)
+      responses:
+        "200": { description: Status, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncStatus" } } } } } }
+
+  /api/v1/devices:
+    get:
+      tags: [Geräte]
+      summary: Eigene Geräte auflisten
+      responses:
+        "200": { description: Geräte, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } }
+  /api/v1/devices/{id}:
+    delete:
+      tags: [Geräte]
+      summary: Gerät abmelden (alle Sitzungen des Geräts widerrufen; Daten bleiben erhalten)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "204": { description: Abgemeldet }
+        "404": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Version: { name: version, in: query, required: true, description: Basisversion, schema: { type: integer, minimum: 1 } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+
+  responses:
+    Error:
+      description: Fehler
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ValidationError:
+      description: Validierungsfehler (`VALIDATION_FAILED`) mit `details`
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Conflict:
+      description: Konflikt (`CONFLICT`) mit aktuellem Serverstand in `error.conflict`
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  schemas:
+    ReportStatus: { type: string, enum: [DRAFT, GENERATED, EDITED, FINALIZED] }
+    WritingStyle: { type: string, enum: [NEUTRAL, FORMAL, SIMPLE, DETAILED] }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer, format: int64 }
+        hasMore: { type: boolean }
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [VALIDATION_FAILED, INVALID_REQUEST_BODY, INVALID_PARAMETER, UNAUTHORIZED, INVALID_CREDENTIALS,
+                     INVALID_REFRESH_TOKEN, ACCOUNT_DISABLED, ACCOUNT_TEMPORARILY_LOCKED, REGISTRATION_DISABLED,
+                     EMAIL_ALREADY_REGISTERED, NOT_FOUND, METHOD_NOT_ALLOWED, CONFLICT, PAYLOAD_TOO_LARGE,
+                     UNSUPPORTED_MEDIA_TYPE, RATE_LIMITED, INTERNAL_ERROR]
+            message: { type: string }
+            requestId: { type: string }
+            details:
+              type: array
+              nullable: true
+              items:
+                type: object
+                properties:
+                  field: { type: string, example: text }
+                  issue: { type: string, example: "too_long:max=5000" }
+            conflict: { $ref: "#/components/schemas/ConflictInfo" }
+    ConflictInfo:
+      type: object
+      nullable: true
+      properties:
+        reason: { type: string, enum: [VERSION_MISMATCH, DELETED_ON_SERVER, ALREADY_EXISTS, DUPLICATE_WEEK, ID_UNAVAILABLE] }
+        serverVersion: { type: integer, nullable: true }
+        serverRecord: { type: object, nullable: true, description: Aktueller Datensatz auf dem Server }
+    HealthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status: { type: string, enum: [ok, unavailable] }
+            components: { type: object, additionalProperties: { type: string, enum: [up, down] } }
+    DeviceInfo:
+      type: object
+      description: Optional. Stabile, auf dem Gerät einmalig erzeugte UUID für Geräteverwaltung und Sync-Status.
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 100 }
+        platform: { type: string, maxLength: 32, default: ANDROID }
+        appVersion: { type: string, maxLength: 32 }
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 10, maxLength: 128 }
+        timezone: { type: string, example: Europe/Berlin }
+        device: { $ref: "#/components/schemas/DeviceInfo" }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password: { type: string }
+        device: { $ref: "#/components/schemas/DeviceInfo" }
+    Account:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        timezone: { type: string }
+        createdAt: { type: string, format: date-time }
+    AccountEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/Account" } } }
+    AuthEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            account: { $ref: "#/components/schemas/Account" }
+            tokens:
+              type: object
+              properties:
+                tokenType: { type: string, example: Bearer }
+                accessToken: { type: string }
+                accessTokenExpiresAt: { type: string, format: date-time }
+                expiresIn: { type: integer, description: Sekunden }
+                refreshToken: { type: string }
+                refreshTokenExpiresAt: { type: string, format: date-time }
+                sessionId: { type: string, format: uuid }
+    Profile:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: Entspricht der Benutzer-ID }
+        name: { type: string }
+        profession: { type: string }
+        company: { type: string }
+        department: { type: string }
+        trainerName: { type: string }
+        trainingStart: { type: string, format: date, nullable: true }
+        trainingEnd: { type: string, format: date, nullable: true }
+        writingStyle: { $ref: "#/components/schemas/WritingStyle" }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProfileEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/Profile" } } }
+    ProfileRequest:
+      type: object
+      required: [version]
+      description: Vollständiger Inhalt; nicht gesendete Textfelder werden geleert.
+      properties:
+        version: { type: integer, minimum: 1 }
+        name: { type: string, maxLength: 120 }
+        profession: { type: string, maxLength: 120 }
+        company: { type: string, maxLength: 160 }
+        department: { type: string, maxLength: 120 }
+        trainerName: { type: string, maxLength: 120 }
+        trainingStart: { type: string, format: date, nullable: true }
+        trainingEnd: { type: string, format: date, nullable: true }
+        writingStyle: { $ref: "#/components/schemas/WritingStyle" }
+    DailyReport:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        date: { type: string, format: date }
+        text: { type: string }
+        note: { type: string }
+        orderIndex: { type: integer }
+        status: { $ref: "#/components/schemas/ReportStatus" }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deleted: { type: boolean }
+        deletedAt: { type: string, format: date-time, nullable: true }
+    DailyReportEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/DailyReport" } } }
+    DailyReportRequest:
+      type: object
+      required: [date, text]
+      properties:
+        id: { type: string, format: uuid, description: Optional beim Erstellen }
+        version: { type: integer, description: Pflicht bei PUT }
+        date: { type: string, format: date }
+        text: { type: string, maxLength: 5000 }
+        note: { type: string, maxLength: 2000 }
+        orderIndex: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+        status: { $ref: "#/components/schemas/ReportStatus" }
+    WeeklyReport:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        weekStart: { type: string, format: date }
+        weekEnd: { type: string, format: date }
+        isoYear: { type: integer }
+        isoWeek: { type: integer }
+        content: { type: string }
+        status: { $ref: "#/components/schemas/ReportStatus" }
+        generatedAt: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deleted: { type: boolean }
+        deletedAt: { type: string, format: date-time, nullable: true }
+    WeeklyReportEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/WeeklyReport" } } }
+    WeeklyReportRequest:
+      type: object
+      required: [weekStart]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        weekStart: { type: string, format: date, description: Muss ein Montag sein }
+        content: { type: string, maxLength: 50000 }
+        status: { $ref: "#/components/schemas/ReportStatus" }
+        generatedAt: { type: string, format: date-time, nullable: true }
+    WeekEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            weekStart: { type: string, format: date }
+            weekEnd: { type: string, format: date }
+            isoYear: { type: integer }
+            isoWeek: { type: integer }
+            timezone: { type: string }
+            days:
+              type: array
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  dayOfWeek: { type: string, example: MONDAY }
+                  dailyReports: { type: array, items: { $ref: "#/components/schemas/DailyReport" } }
+            weeklyReport: { allOf: [{ $ref: "#/components/schemas/WeeklyReport" }], nullable: true }
+    SyncChange:
+      type: object
+      properties:
+        type: { type: string, enum: [DAILY_REPORT, WEEKLY_REPORT, PROFILE] }
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        changeSeq: { type: integer, format: int64 }
+        deleted: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+        data: { type: object, nullable: true, description: Datensatz wie bei REST; null bei Tombstones }
+    SyncPullResponse:
+      type: object
+      properties:
+        changes: { type: array, items: { $ref: "#/components/schemas/SyncChange" } }
+        nextCursor: { type: string }
+        hasMore: { type: boolean }
+        serverTime: { type: string, format: date-time }
+    SyncPushRequest:
+      type: object
+      required: [changes]
+      properties:
+        changes:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [type, operation, id]
+            properties:
+              type: { type: string, enum: [DAILY_REPORT, WEEKLY_REPORT, PROFILE] }
+              operation: { type: string, enum: [UPSERT, DELETE] }
+              id: { type: string, format: uuid, description: "Bei PROFILE: die eigene Benutzer-ID" }
+              baseVersion: { type: integer, nullable: true, description: "null = lokal neu; sonst Version, auf der die Änderung basiert" }
+              data: { type: object, description: Inhalt wie bei REST (bei DELETE nicht nötig) }
+    SyncPushResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              type: { type: string, nullable: true }
+              id: { type: string, nullable: true }
+              status: { type: string, enum: [APPLIED, CONFLICT, REJECTED] }
+              version: { type: integer, nullable: true }
+              changeSeq: { type: integer, format: int64, nullable: true }
+              record: { type: object, nullable: true }
+              conflict: { $ref: "#/components/schemas/ConflictInfo" }
+              error:
+                type: object
+                nullable: true
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+                  details: { type: array, items: { type: object } }
+        serverTime: { type: string, format: date-time }
+    SyncStatus:
+      type: object
+      properties:
+        serverCursor: { type: string }
+        serverTime: { type: string, format: date-time }
+        device:
+          type: object
+          nullable: true
+          properties:
+            deviceId: { type: string, format: uuid }
+            lastPullAt: { type: string, format: date-time, nullable: true }
+            lastPullCursor: { type: string, nullable: true }
+            lastPushAt: { type: string, format: date-time, nullable: true }
+    Device:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        platform: { type: string }
+        appVersion: { type: string }
+        createdAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time }
+        lastPullAt: { type: string, format: date-time, nullable: true }
+        lastPushAt: { type: string, format: date-time, nullable: true }
+        activeSessions: { type: integer }
+        current: { type: boolean }

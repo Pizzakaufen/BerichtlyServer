@@ -1,0 +1,61 @@
+# Berichtly Server + PostgreSQL (lokale Entwicklung oder einfacher Einzelserver-Betrieb).
+#
+#   cp .env.example .env    # DB_PASSWORD und JWT_SECRET setzen
+#   docker compose up -d --build
+#   docker compose ps       # Status inkl. Health-Check
+#   docker compose logs -f server
+#   docker compose down     # stoppen (Daten bleiben im Volume)
+#
+# Sicherheit:
+# - PostgreSQL hat KEINE veröffentlichten Ports und hängt nur im internen Netz "backend".
+# - Der Server ist nur auf 127.0.0.1 veröffentlicht; HTTPS übernimmt ein Reverse Proxy.
+# - Keine Passwörter in dieser Datei; alles kommt aus .env.
+
+name: berichtly
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-berichtly}
+      POSTGRES_USER: ${DB_USER:-berichtly}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD muss in .env gesetzt sein}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build: .
+    image: berichtly-server:1.0.0-alpha
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_SSLMODE: disable   # Verbindung bleibt im privaten Docker-Netz
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${SERVER_PUBLISHED_PORT:-8080}:8080"
+    networks: [backend, frontend]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    stop_grace_period: 30s
+
+networks:
+  backend:
+    internal: true   # kein Internetzugang, nur Server <-> Datenbank
+  frontend: {}
+
+volumes:
+  db-data:

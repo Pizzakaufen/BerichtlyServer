@@ -1,0 +1,28 @@
+# Secrets und lokale Konfiguration – niemals einchecken
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# Build-Artefakte
+bin/
+dist/
+
+# Lokale Datenbanken / Daten
+*.db
+*.sqlite
+pgdata/
+
+# IDE / Betriebssystem
+.idea/
+.vscode/
+*.iml
+local.properties
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

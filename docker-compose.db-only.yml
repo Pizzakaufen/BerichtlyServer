@@ -1,0 +1,21 @@
+# Nur PostgreSQL für die Entwicklung, wenn der Server direkt (ohne Docker) läuft:
+#   docker compose -f docker-compose.db-only.yml up -d
+# Die Datenbank ist ausschließlich über 127.0.0.1 erreichbar – niemals öffentlich.
+
+name: berichtly-dev-db
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-berichtly}
+      POSTGRES_USER: ${DB_USER:-berichtly}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD muss in .env gesetzt sein}
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - dev-db-data:/var/lib/postgresql/data
+
+volumes:
+  dev-db-data:

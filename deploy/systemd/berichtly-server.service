@@ -1,0 +1,51 @@
+# systemd-Unit für Berichtly Server.
+# Installation: deploy/install.sh (siehe docs/DEPLOYMENT.md)
+[Unit]
+Description=Berichtly Server (Backend für die Berichtly-Android-App)
+Documentation=file:///opt/berichtly-server/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=berichtly
+Group=berichtly
+WorkingDirectory=/opt/berichtly-server
+EnvironmentFile=/etc/berichtly-server/berichtly-server.env
+ExecStart=/opt/berichtly-server/berichtly-server serve
+
+# Kontrollierter Shutdown: SIGTERM -> keine neuen Verbindungen, laufende Requests werden beendet,
+# danach wird der Datenbank-Pool geschlossen (SHUTDOWN_TIMEOUT_SECONDS, Standard 15 s).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+# Härtung: kein root, keine zusätzlichen Rechte, nur lesender Zugriff auf das System.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
