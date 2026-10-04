@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"net"
 	"net/http"
@@ -26,7 +28,11 @@ const (
 	ctxLogger
 	ctxPrincipal
 	ctxMetrics
+	ctxRequestInfo
 )
+
+// requestInfo wird nach der Authentifizierung ergänzt, damit das Request-Log die Benutzer-ID enthält.
+type requestInfo struct{ userID string }
 
 const requestIDHeader = "X-Request-ID"
 
@@ -81,6 +87,8 @@ func (a *API) observe(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxRequestID, id)
 		ctx = context.WithValue(ctx, ctxLogger, log)
 		ctx = context.WithValue(ctx, ctxMetrics, a.metrics)
+		info := &requestInfo{}
+		ctx = context.WithValue(ctx, ctxRequestInfo, info)
 		r = r.WithContext(ctx)
 		rec := &statusRecorder{ResponseWriter: w}
 
@@ -98,8 +106,12 @@ func (a *API) observe(next http.Handler) http.Handler {
 			}
 			a.metrics.record(rec.status)
 			if r.URL.Path != "/api/v1/health/live" {
-				log.Info("request", "method", r.Method, "path", r.URL.Path, "status", rec.status,
-					"duration_ms", time.Since(start).Milliseconds())
+				attrs := []any{"method", r.Method, "path", r.URL.Path, "status", rec.status,
+					"duration_ms", time.Since(start).Milliseconds()}
+				if info.userID != "" {
+					attrs = append(attrs, "user_id", info.userID)
+				}
+				log.Info("request", attrs...)
 			}
 		}()
 		next.ServeHTTP(rec, r)
@@ -107,14 +119,20 @@ func (a *API) observe(next http.Handler) http.Handler {
 }
 
 // securityHeaders setzt Schutz-Header; API-Antworten dürfen nicht zwischengespeichert werden.
-func securityHeaders(next http.Handler) http.Handler {
+// HSTS wird nur gesetzt, wenn ein vertrauenswürdiger Reverse Proxy HTTPS meldet.
+func (a *API) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		if strings.HasPrefix(r.URL.Path, "/api/v") || strings.HasPrefix(r.URL.Path, "/internal/") {
 			h.Set("Cache-Control", "no-store")
+			h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		}
+		if a.cfg.Server.TrustProxy && r.Header.Get("X-Forwarded-Proto") == "https" {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -168,9 +186,7 @@ func (a *API) clientIP(r *http.Request) string {
 func (a *API) rateLimit(l *limiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ok, retry := l.allow(a.clientIP(r)); !ok {
-			w.Header().Set("Retry-After", strconv.Itoa(retry))
-			writeError(w, r, apperr.New(http.StatusTooManyRequests, apperr.CodeRateLimited,
-				"Zu viele Anfragen. Bitte kurz warten und erneut versuchen."))
+			writeRateLimited(w, r, retry)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -194,6 +210,9 @@ func (a *API) authenticated(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="berichtly"`)
 			writeError(w, r, apperr.Unauthorized())
 			return
+		}
+		if info, ok := r.Context().Value(ctxRequestInfo).(*requestInfo); ok {
+			info.userID = p.UserID.String()
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxPrincipal, *p)))
 	}
@@ -302,4 +321,17 @@ type metricsSnapshot struct {
 func (m *metrics) snapshot() metricsSnapshot {
 	return metricsSnapshot{m.total.Load(), m.s2xx.Load(), m.s3xx.Load(), m.s4xx.Load(), m.s5xx.Load(),
 		m.limited.Load(), m.unhandled.Load()}
+}
+
+// writeRateLimited antwortet mit 429 und Retry-After (Sekunden bis zur nächsten erlaubten Anfrage).
+func writeRateLimited(w http.ResponseWriter, r *http.Request, retryAfter int) {
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	writeError(w, r, apperr.New(http.StatusTooManyRequests, apperr.CodeRateLimited,
+		"Zu viele Anfragen. Bitte kurz warten und erneut versuchen."))
+}
+
+// hashKey bildet einen Schlüssel für das Rate Limiting, ohne den Klartext im Speicher zu halten.
+func hashKey(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:16])
 }

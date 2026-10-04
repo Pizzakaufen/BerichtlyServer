@@ -26,6 +26,9 @@ const (
 	CodeUnsupportedMediaType     = "UNSUPPORTED_MEDIA_TYPE"
 	CodeRateLimited              = "RATE_LIMITED"
 	CodeInternalError            = "INTERNAL_ERROR"
+	CodeSyncCursorExpired        = "SYNC_CURSOR_EXPIRED"
+	CodeDeviceRequired           = "DEVICE_REQUIRED"
+	CodeOperationIDReused        = "OPERATION_ID_REUSED"
 )
 
 // ConflictReason beschreibt, warum eine Änderung nicht übernommen wurde.

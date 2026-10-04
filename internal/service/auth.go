@@ -27,11 +27,12 @@ const (
 
 var emailPattern = regexp.MustCompile(`^[a-z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 
-// DeviceRequest beschreibt das anmeldende Gerät (optional).
+// DeviceRequest beschreibt das anmeldende Gerät (optional beim Login, Pflicht bei POST /devices).
 type DeviceRequest struct {
 	ID         *string `json:"id"` // stabile, auf dem Gerät einmalig erzeugte UUID
 	Name       *string `json:"name"`
 	Platform   *string `json:"platform"`
+	OSVersion  *string `json:"osVersion"`
 	AppVersion *string `json:"appVersion"`
 }
 
@@ -50,6 +51,11 @@ type LoginRequest struct {
 
 type RefreshRequest struct {
 	RefreshToken *string `json:"refreshToken"`
+}
+
+type PasswordChangeRequest struct {
+	CurrentPassword *string `json:"currentPassword"`
+	NewPassword     *string `json:"newPassword"`
 }
 
 type TokenResponse struct {
@@ -88,7 +94,7 @@ func (s *Auth) Register(ctx context.Context, req RegisterRequest) (*AuthResponse
 			"Die Registrierung ist auf diesem Server deaktiviert.")
 	}
 	v := validate.New()
-	email := validEmail(v, req.Email)
+	email := ValidEmail(v, req.Email)
 	if req.Password == nil {
 		v.Add("password", "required")
 	} else if issue := PasswordIssue(*req.Password, email); issue != "" {
@@ -120,7 +126,7 @@ func (s *Auth) Register(ctx context.Context, req RegisterRequest) (*AuthResponse
 		if err != nil {
 			return err
 		}
-		resp, err = s.createSession(ctx, tx, user, device)
+		resp, err = s.createSession(ctx, tx, user, device, store.EventRegistered)
 		return err
 	})
 	if store.IsUniqueViolation(err) {
@@ -136,7 +142,7 @@ func (s *Auth) Register(ctx context.Context, req RegisterRequest) (*AuthResponse
 
 func (s *Auth) Login(ctx context.Context, req LoginRequest) (*AuthResponse, error) {
 	v := validate.New()
-	email := validEmail(v, req.Email)
+	email := ValidEmail(v, req.Email)
 	password, _ := v.Text("password", req.Password, validate.TextOpts{Max: PasswordMaxLength, Required: true})
 	device := validDevice(v, req.Device)
 	if err := v.Err(); err != nil {
@@ -149,6 +155,7 @@ func (s *Auth) Login(ctx context.Context, req LoginRequest) (*AuthResponse, erro
 	}
 	if user == nil {
 		s.Hasher.VerifyDummy(ctx, password)
+		s.event(ctx, nil, store.EventLoginUnknownAccount, nil, nil)
 		return nil, invalidCredentials()
 	}
 	if user.Locked {
@@ -162,6 +169,11 @@ func (s *Auth) Login(ctx context.Context, req LoginRequest) (*AuthResponse, erro
 	if !ok {
 		if err := store.RecordFailedLogin(ctx, s.DB.Pool, user.ID, s.Cfg.MaxFailedLogins, s.Cfg.LockoutDuration); err != nil {
 			return nil, err
+		}
+		s.event(ctx, &user.ID, store.EventLoginFailed, nil, nil)
+		if after, err := store.FindUserByID(ctx, s.DB.Pool, user.ID); err == nil && after != nil && after.Locked {
+			s.event(ctx, &user.ID, store.EventAccountLocked, nil, nil)
+			s.Log.Warn("Konto nach Fehlversuchen vorübergehend gesperrt", "user_id", user.ID)
 		}
 		s.Log.Info("Fehlgeschlagener Login", "user_id", user.ID)
 		return nil, invalidCredentials()
@@ -182,7 +194,7 @@ func (s *Auth) Login(ctx context.Context, req LoginRequest) (*AuthResponse, erro
 		if err := store.RecordSuccessfulLogin(ctx, tx, user.ID, rehash); err != nil {
 			return err
 		}
-		resp, err = s.createSession(ctx, tx, user, device)
+		resp, err = s.createSession(ctx, tx, user, device, store.EventLoginSucceeded)
 		return err
 	})
 	if err != nil {
@@ -212,7 +224,10 @@ func (s *Auth) Refresh(ctx context.Context, req RefreshRequest) (*AuthResponse, 
 		case row.Used:
 			s.Log.Warn("Wiederverwendung eines Refresh Tokens erkannt – Sitzung widerrufen",
 				"user_id", row.UserID, "session_id", row.SessionID)
-			return store.RevokeSession(ctx, tx, row.SessionID, store.RevokeRefreshTokenReuse)
+			if err := store.RevokeSession(ctx, tx, row.SessionID, store.RevokeRefreshTokenReuse); err != nil {
+				return err
+			}
+			return store.RecordSecurityEvent(ctx, tx, &row.UserID, store.EventRefreshTokenReuse, &row.SessionID, row.DeviceRef)
 		case row.Expired || !row.SessionActive || !row.UserActive:
 			return nil
 		}
@@ -236,15 +251,104 @@ func (s *Auth) Refresh(ctx context.Context, req RefreshRequest) (*AuthResponse, 
 }
 
 func (s *Auth) Logout(ctx context.Context, p Principal) error {
-	if err := store.RevokeSession(ctx, s.DB.Pool, p.SessionID, store.RevokeLogout); err != nil {
+	err := s.DB.Tx(ctx, func(tx pgx.Tx) error {
+		if err := store.RevokeSession(ctx, tx, p.SessionID, store.RevokeLogout); err != nil {
+			return err
+		}
+		return store.RecordSecurityEvent(ctx, tx, &p.UserID, store.EventLogout, &p.SessionID, p.DeviceRef)
+	})
+	if err == nil {
+		s.Log.Info("Logout", "user_id", p.UserID, "session_id", p.SessionID)
+	}
+	return err
+}
+
+// LogoutAll widerruft alle Sitzungen des Kontos auf allen Geräten (inklusive der aktuellen).
+func (s *Auth) LogoutAll(ctx context.Context, p Principal) (int64, error) {
+	var n int64
+	err := s.DB.Tx(ctx, func(tx pgx.Tx) error {
+		var err error
+		if n, err = store.RevokeAllSessions(ctx, tx, p.UserID, nil, store.RevokeLogoutAll); err != nil {
+			return err
+		}
+		return store.RecordSecurityEvent(ctx, tx, &p.UserID, store.EventLogoutAll, &p.SessionID, p.DeviceRef)
+	})
+	if err == nil {
+		s.Log.Info("Alle Sitzungen widerrufen", "user_id", p.UserID, "sessions", n)
+	}
+	return n, err
+}
+
+// ChangePassword setzt ein neues Passwort und widerruft alle anderen Sitzungen (Sicherheitsereignis).
+// Die aktuelle Sitzung bleibt bestehen.
+func (s *Auth) ChangePassword(ctx context.Context, p Principal, req PasswordChangeRequest) error {
+	v := validate.New()
+	current, _ := v.Text("currentPassword", req.CurrentPassword, validate.TextOpts{Max: PasswordMaxLength, Required: true})
+	if req.NewPassword == nil {
+		v.Add("newPassword", "required")
+	}
+	if err := v.Err(); err != nil {
 		return err
 	}
-	s.Log.Info("Logout", "user_id", p.UserID, "session_id", p.SessionID)
-	return nil
+	user, err := store.FindUserByID(ctx, s.DB.Pool, p.UserID)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return apperr.Unauthorized()
+	}
+	if issue := PasswordIssue(*req.NewPassword, user.Email); issue != "" {
+		return apperr.Validation([]apperr.FieldError{{Field: "newPassword", Issue: issue}})
+	}
+	ok, err := s.Hasher.Verify(ctx, current, user.PasswordHash)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		s.event(ctx, &p.UserID, store.EventPasswordChangeFailed, &p.SessionID, p.DeviceRef)
+		return apperr.New(http.StatusUnauthorized, apperr.CodeInvalidCredentials, "Das aktuelle Passwort ist falsch.")
+	}
+	if *req.NewPassword == current {
+		return apperr.Validation([]apperr.FieldError{{Field: "newPassword", Issue: "same_as_current"}})
+	}
+	hash, err := s.Hasher.Hash(ctx, *req.NewPassword)
+	if err != nil {
+		return err
+	}
+	return s.DB.Tx(ctx, func(tx pgx.Tx) error {
+		if err := store.UpdatePassword(ctx, tx, p.UserID, hash); err != nil {
+			return err
+		}
+		n, err := store.RevokeAllSessions(ctx, tx, p.UserID, &p.SessionID, store.RevokePasswordChanged)
+		if err != nil {
+			return err
+		}
+		s.Log.Info("Passwort geändert, andere Sitzungen widerrufen", "user_id", p.UserID, "sessions", n)
+		return store.RecordSecurityEvent(ctx, tx, &p.UserID, store.EventPasswordChanged, &p.SessionID, p.DeviceRef)
+	})
+}
+
+// Sessions liefert die aktiven Sitzungen des Kontos.
+func (s *Auth) Sessions(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.Session, int64, error) {
+	return store.ListActiveSessions(ctx, s.DB.Pool, userID, limit, offset)
+}
+
+// RevokeSession beendet eine eigene Sitzung. Fremde Sitzungs-IDs verhalten sich wie unbekannte.
+func (s *Auth) RevokeSession(ctx context.Context, p Principal, sessionID uuid.UUID) error {
+	return s.DB.Tx(ctx, func(tx pgx.Tx) error {
+		ok, err := store.RevokeOwnSession(ctx, tx, p.UserID, sessionID, store.RevokeSessionRemoved)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return apperr.NotFound("Sitzung")
+		}
+		return store.RecordSecurityEvent(ctx, tx, &p.UserID, store.EventSessionRevoked, &sessionID, nil)
+	})
 }
 
 // Authenticate prüft ein Access Token und zusätzlich, ob Sitzung und Konto noch aktiv sind
-// (Logout und Sperren wirken dadurch sofort).
+// (Logout und Sperren wirken dadurch sofort). Aktualisiert "zuletzt aktiv" höchstens minütlich.
 func (s *Auth) Authenticate(ctx context.Context, token string) (*Principal, error) {
 	userID, sessionID, err := s.Tokens.ParseAccessToken(token)
 	if err != nil {
@@ -254,10 +358,13 @@ func (s *Auth) Authenticate(ctx context.Context, token string) (*Principal, erro
 	if err != nil || sess == nil {
 		return nil, err
 	}
+	if err := store.TouchActivity(ctx, s.DB.Pool, sess.SessionID, sess.DeviceRef); err != nil {
+		s.Log.Warn("Aktivitätszeitpunkt konnte nicht gespeichert werden", "error", err.Error())
+	}
 	return &Principal{UserID: sess.UserID, SessionID: sess.SessionID, DeviceRef: sess.DeviceRef}, nil
 }
 
-func (s *Auth) createSession(ctx context.Context, tx pgx.Tx, user *model.User, device *model.DeviceInfo) (*AuthResponse, error) {
+func (s *Auth) createSession(ctx context.Context, tx pgx.Tx, user *model.User, device *model.DeviceInfo, event string) (*AuthResponse, error) {
 	var deviceRef *uuid.UUID
 	if device != nil {
 		ref, err := store.UpsertDevice(ctx, tx, user.ID, *device)
@@ -268,6 +375,9 @@ func (s *Auth) createSession(ctx context.Context, tx pgx.Tx, user *model.User, d
 	}
 	sessionID := uuid.New()
 	if err := store.CreateSession(ctx, tx, sessionID, user.ID, deviceRef, s.Cfg.SessionMaxLifetime); err != nil {
+		return nil, err
+	}
+	if err := store.RecordSecurityEvent(ctx, tx, &user.ID, event, &sessionID, deviceRef); err != nil {
 		return nil, err
 	}
 	return s.issueTokens(ctx, tx, user, sessionID)
@@ -300,6 +410,14 @@ func (s *Auth) issueTokens(ctx context.Context, tx pgx.Tx, user *model.User, ses
 	}, nil
 }
 
+// event speichert ein Sicherheitsereignis außerhalb einer Transaktion. Ein Fehler beim Speichern
+// darf die eigentliche Antwort (z. B. "falsches Passwort") nicht verändern, wird aber geloggt.
+func (s *Auth) event(ctx context.Context, userID *uuid.UUID, eventType string, sessionID, deviceRef *uuid.UUID) {
+	if err := store.RecordSecurityEvent(ctx, s.DB.Pool, userID, eventType, sessionID, deviceRef); err != nil {
+		s.Log.Error("Sicherheitsereignis konnte nicht gespeichert werden", "event", eventType, "error", err.Error())
+	}
+}
+
 // PasswordIssue liefert einen Fehlercode oder "" für akzeptable Passwörter.
 func PasswordIssue(password, email string) string {
 	n := utf8.RuneCountInString(password)
@@ -324,7 +442,8 @@ func PasswordIssue(password, email string) string {
 	return ""
 }
 
-func validEmail(v *validate.V, raw *string) string {
+// ValidEmail normalisiert (trim, Kleinschreibung) und prüft eine E-Mail-Adresse.
+func ValidEmail(v *validate.V, raw *string) string {
 	if raw == nil {
 		v.Add("email", "required")
 		return ""
@@ -343,14 +462,22 @@ func validDevice(v *validate.V, d *DeviceRequest) *model.DeviceInfo {
 		return nil
 	}
 	id, idOK := v.UUID("device.id", d.ID, true)
-	name, ok1 := v.Text("device.name", d.Name, validate.TextOpts{Max: 100, SingleLine: true})
-	platform, ok2 := v.Text("device.platform", d.Platform, validate.TextOpts{Max: 32, SingleLine: true, Default: "ANDROID"})
-	appVersion, ok3 := v.Text("device.appVersion", d.AppVersion, validate.TextOpts{Max: 32, SingleLine: true})
-	if !idOK || !ok1 || !ok2 || !ok3 {
+	trim := func(p *string) *string {
+		if p == nil {
+			return nil
+		}
+		t := strings.TrimSpace(*p)
+		return &t
+	}
+	name, ok1 := v.Text("device.name", trim(d.Name), validate.TextOpts{Max: 100, SingleLine: true})
+	platform, ok2 := v.Text("device.platform", trim(d.Platform), validate.TextOpts{Max: 32, SingleLine: true, Default: "ANDROID"})
+	osVersion, ok3 := v.Text("device.osVersion", trim(d.OSVersion), validate.TextOpts{Max: 32, SingleLine: true})
+	appVersion, ok4 := v.Text("device.appVersion", trim(d.AppVersion), validate.TextOpts{Max: 32, SingleLine: true})
+	if !idOK || !ok1 || !ok2 || !ok3 || !ok4 {
 		return nil
 	}
-	return &model.DeviceInfo{DeviceID: id, Name: strings.TrimSpace(name),
-		Platform: strings.ToUpper(strings.TrimSpace(platform)), AppVersion: strings.TrimSpace(appVersion)}
+	return &model.DeviceInfo{DeviceID: id, Name: name, Platform: strings.ToUpper(platform),
+		OSVersion: osVersion, AppVersion: appVersion}
 }
 
 func invalidCredentials() error {

@@ -64,6 +64,27 @@ func WeekContaining(d Date) IsoWeek {
 	return IsoWeek{Start: d.AddDays(-offset)}
 }
 
+// IsoWeekOf liefert die ISO-Woche (isoYear, isoWeek). false, wenn es diese Woche nicht gibt
+// (z. B. Woche 53 in einem Jahr mit nur 52 Wochen).
+func IsoWeekOf(isoYear, isoWeek int) (IsoWeek, bool) {
+	if isoWeek < 1 || isoWeek > 53 || isoYear < MinDate.Year || isoYear > MaxDate.Year {
+		return IsoWeek{}, false
+	}
+	// Der 4. Januar liegt immer in ISO-Woche 1.
+	w := WeekContaining(Date{isoYear, time.January, 4})
+	w.Start = w.Start.AddDays((isoWeek - 1) * 7)
+	if y, n := w.ISO(); y != isoYear || n != isoWeek {
+		return IsoWeek{}, false
+	}
+	return w, true
+}
+
+// MonthRange liefert ersten und letzten Tag eines Monats.
+func MonthRange(year int, month time.Month) (Date, Date) {
+	first := Date{year, month, 1}
+	return first, DateOf(first.Time().AddDate(0, 1, -1))
+}
+
 func (w IsoWeek) End() Date { return w.Start.AddDays(6) }
 
 func (w IsoWeek) ISO() (year, week int) { return w.Start.Time().ISOWeek() }

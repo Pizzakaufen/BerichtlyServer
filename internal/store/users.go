@@ -70,3 +70,10 @@ func UpdateUserTimezone(ctx context.Context, q Querier, id uuid.UUID, tz string)
 	_, err := q.Exec(ctx, `UPDATE users SET timezone = $1 WHERE id = $2`, tz, id)
 	return err
 }
+
+// UpdatePassword speichert einen neuen Passwort-Hash und setzt Fehlversuche zurück.
+func UpdatePassword(ctx context.Context, q Querier, id uuid.UUID, hash string) error {
+	_, err := q.Exec(ctx, `UPDATE users SET password_hash = $1, password_changed_at = now(),
+		failed_login_attempts = 0, locked_until = NULL WHERE id = $2`, hash, id)
+	return err
+}

@@ -91,10 +91,11 @@ type DailyReport struct {
 	UserID    uuid.UUID
 	Values    DailyValues
 	Version   int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time // Serverzeit
+	UpdatedAt time.Time // Serverzeit
 	DeletedAt *time.Time
 	ChangeSeq int64
+	Origin    Origin
 }
 
 // ---------------------------------------------------------------------------
@@ -124,36 +125,96 @@ type WeeklyReport struct {
 	UserID    uuid.UUID
 	Values    WeeklyValues
 	Version   int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time // Serverzeit
+	UpdatedAt time.Time // Serverzeit
 	DeletedAt *time.Time
 	ChangeSeq int64
+	Origin    Origin
 }
 
 // ---------------------------------------------------------------------------
 // Geräte
 // ---------------------------------------------------------------------------
 
+// DeviceInfo sind die vom Gerät gemeldeten Angaben. Bewusst keine Hardware-Kennungen,
+// Seriennummern oder Standortdaten.
 type DeviceInfo struct {
 	DeviceID   uuid.UUID
 	Name       string
 	Platform   string
+	OSVersion  string
 	AppVersion string
 }
 
+// SyncStatus eines Geräts.
+type SyncStatus string
+
+const (
+	SyncNever    SyncStatus = "NEVER"    // noch nie eine Synchronisierung abgeschlossen
+	SyncSuccess  SyncStatus = "SUCCESS"  // letzte Synchronisierung erfolgreich
+	SyncFailed   SyncStatus = "FAILED"   // letzte Synchronisierung fehlgeschlagen
+	SyncConflict SyncStatus = "CONFLICT" // abgeschlossen, aber mit ungelösten Konflikten
+)
+
 type Device struct {
-	Ref            uuid.UUID // server-interne Referenz
-	UserID         uuid.UUID
-	DeviceID       uuid.UUID // stabile, vom Client erzeugte Geräte-ID
-	Name           string
-	Platform       string
-	AppVersion     string
-	CreatedAt      time.Time
-	LastSeenAt     time.Time
-	LastPullAt     *time.Time
-	LastPullCursor *int64
-	LastPushAt     *time.Time
-	ActiveSessions int
+	Ref                  uuid.UUID // server-interne Referenz
+	UserID               uuid.UUID
+	DeviceID             uuid.UUID // stabile, vom Client erzeugte Geräte-ID
+	Name                 string
+	Platform             string
+	OSVersion            string
+	AppVersion           string
+	CreatedAt            time.Time
+	LastSeenAt           time.Time
+	RevokedAt            *time.Time
+	LastPullAt           *time.Time
+	LastPullCursor       *int64
+	LastPushAt           *time.Time
+	SyncStatus           SyncStatus
+	LastSyncStartedAt    *time.Time
+	LastSuccessfulSyncAt *time.Time
+	LastSuccessfulCursor *int64
+	LastFailedSyncAt     *time.Time
+	LastSyncErrorCode    *string
+	UnresolvedConflicts  int
+	ActiveSessions       int
+}
+
+// Origin beschreibt die Herkunft der letzten Änderung eines Berichts. Clientzeit und lokale ID
+// sind reine Zusatzinformationen; maßgeblich sind immer Serverzeit, Version und Änderungsnummer.
+type Origin struct {
+	ClientUpdatedAt   *time.Time
+	ClientLocalID     *string
+	CreatedByDeviceID *uuid.UUID // stabile Geräte-ID (nicht die interne Referenz)
+	LastDeviceID      *uuid.UUID
+	LastOperationID   *uuid.UUID
+}
+
+// WriteMeta begleitet eine Schreiboperation (Gerät, Operation, Clientangaben).
+type WriteMeta struct {
+	DeviceRef       *uuid.UUID
+	OperationID     *uuid.UUID
+	ClientUpdatedAt *time.Time
+	ClientLocalID   *string
+}
+
+// Session ist eine Anmeldung (für die Sitzungsübersicht).
+type Session struct {
+	ID         uuid.UUID
+	DeviceID   *uuid.UUID
+	DeviceName *string
+	CreatedAt  time.Time
+	LastUsedAt time.Time
+	ExpiresAt  time.Time
+}
+
+// SecurityEvent ist ein technisches Sicherheitsereignis ohne Inhalte.
+type SecurityEvent struct {
+	ID        int64
+	Type      string
+	SessionID *uuid.UUID
+	DeviceID  *uuid.UUID
+	CreatedAt time.Time
 }
 
 func datePtrEqual(a, b *Date) bool {

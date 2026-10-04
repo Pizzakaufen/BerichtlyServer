@@ -40,7 +40,7 @@ func (a *App) SeedDev(ctx context.Context) (email, password string, err error) {
 	for i, day := range week.Days()[:3] {
 		values := model.DailyValues{Date: day, Text: fmt.Sprintf("[Entwicklungsdaten] Beispieltätigkeit %d", i+1),
 			Status: model.StatusDraft}
-		if _, err := a.Reports.Daily.Create(ctx, userID, uuid.New(), values, nil); err != nil {
+		if _, err := a.Reports.Daily.Create(ctx, userID, uuid.New(), values, model.WriteMeta{}); err != nil {
 			return "", "", err
 		}
 	}

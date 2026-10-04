@@ -18,6 +18,7 @@ import (
 
 	"berichtly-server/internal/app"
 	"berichtly-server/internal/config"
+	"berichtly-server/internal/store"
 )
 
 const usage = `Berichtly Server – Backend für die Berichtly-Android-App
@@ -27,8 +28,12 @@ Verwendung: berichtly-server [--env-file <pfad>] <befehl>
 Befehle:
   serve          Server starten (Standard). Beenden mit SIGTERM/Strg+C (kontrollierter Shutdown).
   migrate        Datenbankmigrationen ausführen und beenden.
+  migrate-status Stand der Datenbankmigrationen anzeigen (angewendet, ausstehend, verändert).
+  db-check       Datenbankverbindung und Schema-Version prüfen (Exit-Code 0 = in Ordnung).
+  maintenance    Wartung jetzt ausführen: abgelaufene Tombstones, Sync-Operationen,
+                 Sicherheitsereignisse und Sitzungen gemäß Aufbewahrungsfristen entfernen.
   check-config   Konfiguration prüfen (ohne Secrets auszugeben) und beenden.
-  healthcheck    Health-Check des laufenden Servers abfragen (Exit-Code 0 = gesund).
+  healthcheck    Readiness des laufenden Servers abfragen (Exit-Code 0 = bereit).
   seed-dev       Entwicklungskonto mit Beispieldaten anlegen (nur APP_ENV=development).
   version        Version anzeigen.
   help           Diese Hilfe anzeigen.
@@ -72,6 +77,33 @@ func main() {
 			a.DB.Close()
 			os.Exit(1)
 		}
+	case "migrate-status":
+		migrateStatus(loadConfig(envFile))
+	case "db-check":
+		dbCheck(loadConfig(envFile))
+	case "maintenance":
+		cfg := loadConfig(envFile)
+		a := newApp(cfg)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		res, err := a.RunMaintenance(ctx)
+		cancel()
+		a.DB.Close()
+		if err != nil {
+			fail(1, "Wartung fehlgeschlagen: "+err.Error())
+		}
+		if res.Skipped {
+			fmt.Println("Wartung übersprungen: Ein anderer Wartungslauf ist gerade aktiv.")
+			return
+		}
+		fmt.Printf(`Wartung abgeschlossen:
+  Tombstones entfernt:          %d
+  Gültige Sync-Cursor ab:       %d
+  Sync-Operationen entfernt:    %d
+  Sicherheitsereignisse entf.:  %d
+  Sitzungen entfernt:           %d
+  Refresh Tokens entfernt:      %d
+`,
+			res.TombstonesPurged, res.MinValidCursor, res.OperationsPurged, res.SecurityEventsPurged, res.SessionsPurged, res.RefreshTokensPurged)
 	case "seed-dev":
 		cfg := loadConfig(envFile)
 		a := newApp(cfg)
@@ -110,6 +142,18 @@ func serve(cfg *config.Config) {
 			os.Exit(1)
 		}
 	}
+	if v, err := a.DB.SchemaVersion(ctx); err != nil {
+		log.Warn("Schema-Version konnte nicht geprüft werden (Datenbank nicht erreichbar?)", "error", err.Error())
+	} else if v < store.LatestSchemaVersion() {
+		log.Error("Datenbankschema ist veraltet – bitte zuerst 'berichtly-server migrate' ausführen",
+			"schema_version", v, "required", store.LatestSchemaVersion())
+		a.DB.Close()
+		os.Exit(1)
+	} else if v > store.LatestSchemaVersion() {
+		log.Warn("Datenbankschema ist neuer als diese Programmversion (Downgrade?)", "schema_version", v,
+			"known", store.LatestSchemaVersion())
+	}
+	a.StartMaintenance(ctx)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port)),
@@ -156,7 +200,7 @@ func healthcheck(env map[string]string) {
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
-	url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/api/v1/health"
+	url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/api/v1/health/ready"
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -203,4 +247,64 @@ func newApp(cfg *config.Config) *app.App {
 func fail(code int, msg string) {
 	fmt.Fprintln(os.Stderr, msg)
 	os.Exit(code)
+}
+
+func migrateStatus(cfg *config.Config) {
+	a := newApp(cfg)
+	defer a.DB.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	states, err := a.DB.MigrationStatus(ctx)
+	if err != nil {
+		a.DB.Close()
+		fail(1, "Migrationsstatus nicht abrufbar: "+err.Error())
+	}
+	pending, problems := 0, 0
+	fmt.Println("Version  Status    Angewendet (UTC)      Name")
+	for _, s := range states {
+		applied := "-"
+		if s.AppliedAt != nil {
+			applied = s.AppliedAt.UTC().Format("2006-01-02 15:04:05")
+		}
+		fmt.Printf("%04d     %-9s %-21s %s\n", s.Version, s.State, applied, s.Name)
+		switch s.State {
+		case "pending":
+			pending++
+		case "modified", "unknown":
+			problems++
+		}
+	}
+	fmt.Printf("\nAusstehend: %d, Auffällig: %d (Programmversion %s, erwartet Schema %d)\n",
+		pending, problems, app.Version, store.LatestSchemaVersion())
+	if problems > 0 {
+		a.DB.Close()
+		os.Exit(1)
+	}
+}
+
+func dbCheck(cfg *config.Config) {
+	a := newApp(cfg)
+	defer a.DB.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := a.DB.Ping(ctx); err != nil {
+		a.DB.Close()
+		fail(1, "Datenbank nicht erreichbar ("+cfg.Database.Display+"): "+err.Error())
+	}
+	latency := time.Since(start)
+	var serverVersion string
+	_ = a.DB.Pool.QueryRow(ctx, `SHOW server_version`).Scan(&serverVersion)
+	v, err := a.DB.SchemaVersion(ctx)
+	if err != nil {
+		a.DB.Close()
+		fail(1, "Schema-Version nicht lesbar: "+err.Error())
+	}
+	fmt.Printf("Datenbank erreichbar: %s\n  PostgreSQL:     %s\n  Antwortzeit:    %s\n  Schema-Version: %d (erwartet %d)\n",
+		cfg.Database.Display, serverVersion, latency.Round(time.Millisecond), v, store.LatestSchemaVersion())
+	if v != store.LatestSchemaVersion() {
+		fmt.Println("Hinweis: Schema nicht aktuell – 'berichtly-server migrate' ausführen.")
+		a.DB.Close()
+		os.Exit(1)
+	}
 }

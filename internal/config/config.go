@@ -32,6 +32,9 @@ type Config struct {
 	Log       Log
 	APIDocs   bool
 	Status    Status
+	Retention Retention
+	// Intervall der automatischen Wartung im Server (0 = aus; dann per CLI `maintenance`).
+	MaintenanceInterval time.Duration
 }
 
 type Server struct {
@@ -67,8 +70,19 @@ type Auth struct {
 }
 
 type RateLimit struct {
-	AuthPerMinute int // Login, Registrierung, Token-Erneuerung pro Client-IP
-	APIPerMinute  int // alle übrigen Endpunkte pro Client-IP
+	LoginPerMinute           int // pro Client-IP
+	LoginPerAccountPerMinute int // pro E-Mail-Adresse (zusätzlich, gegen verteilte Angriffe auf ein Konto)
+	RegisterPerMinute        int // pro Client-IP
+	RefreshPerMinute         int // pro Client-IP (normale App-Nutzung, daher großzügiger)
+	APIPerMinute             int // alle übrigen Endpunkte pro Client-IP
+}
+
+// Retention sind die Aufbewahrungsfristen der Wartung.
+type Retention struct {
+	Tombstones     time.Duration // gelöschte Berichte (Tombstones) für die Synchronisierung
+	Operations     time.Duration // Idempotenz-Einträge verarbeiteter Sync-Operationen
+	SecurityEvents time.Duration
+	Sessions       time.Duration // abgelaufene/widerrufene Sitzungen
 }
 
 type CORS struct {
@@ -97,6 +111,10 @@ func (c *Config) Summary() string {
 	if len(c.CORS.AllowedOrigins) > 0 {
 		origins = strings.Join(c.CORS.AllowedOrigins, ", ")
 	}
+	maintenance := "nur per CLI (berichtly-server maintenance)"
+	if c.MaintenanceInterval > 0 {
+		maintenance = "automatisch alle " + c.MaintenanceInterval.String()
+	}
 	docs := "deaktiviert"
 	if c.APIDocs {
 		docs = "aktiviert (/api/docs)"
@@ -105,7 +123,9 @@ func (c *Config) Summary() string {
 Server:     %s:%d (trustProxy=%t, maxBody=%d Byte)
 Datenbank:  %s (Pool max=%d, min=%d, migrateOnStart=%t)
 Auth:       Access Token %s, Refresh Token %s, Sitzung max. %s, Registrierung=%t, JWT_SECRET=***
-Rate Limit: Auth %d/min, API %d/min pro IP
+Rate Limit: Login %d/min (pro Konto %d/min), Registrierung %d/min, Refresh %d/min, API %d/min pro IP
+Aufbewahrung: Tombstones %s, Sync-Operationen %s, Sicherheitsereignisse %s, alte Sitzungen %s
+Wartung:    %s
 CORS:       %s
 Logging:    %s / %s
 API-Doku:   %s
@@ -113,7 +133,10 @@ Status:     %s`,
 		c.Env, c.Server.Host, c.Server.Port, c.Server.TrustProxy, c.Server.MaxBodyBytes,
 		c.Database.Display, c.Database.MaxConns, c.Database.MinConns, c.Database.MigrateOnStart,
 		c.Auth.AccessTokenTTL, c.Auth.RefreshTokenTTL, c.Auth.SessionMaxLifetime, c.Auth.RegistrationEnabled,
-		c.RateLimit.AuthPerMinute, c.RateLimit.APIPerMinute, origins, c.Log.Level, c.Log.Format, docs, status)
+		c.RateLimit.LoginPerMinute, c.RateLimit.LoginPerAccountPerMinute, c.RateLimit.RegisterPerMinute,
+		c.RateLimit.RefreshPerMinute, c.RateLimit.APIPerMinute,
+		days(c.Retention.Tombstones), days(c.Retention.Operations), days(c.Retention.SecurityEvents), days(c.Retention.Sessions),
+		maintenance, origins, c.Log.Level, c.Log.Format, docs, status)
 }
 
 // Load liest die Konfiguration aus env (z. B. EnvMap(os.Environ())).
@@ -168,10 +191,31 @@ func Load(env map[string]string) (*Config, error) {
 		r.fail("DEFAULT_TIMEZONE ist keine gültige Zeitzone (z. B. Europe/Berlin)")
 	}
 
-	c.RateLimit = RateLimit{
-		AuthPerMinute: r.integer("RATE_LIMIT_AUTH_PER_MINUTE", 10, 1, 10000),
-		APIPerMinute:  r.integer("RATE_LIMIT_API_PER_MINUTE", 300, 1, 100000),
+	// Ist RATE_LIMIT_AUTH_PER_MINUTE (aus 1.0) gesetzt, gilt der Wert weiterhin für alle Auth-Endpunkte;
+	// sonst die neuen, je Endpunkt abgestimmten Standardwerte.
+	loginDef, registerDef, refreshDef := 10, 5, 30
+	if r.optional("RATE_LIMIT_AUTH_PER_MINUTE") != "" {
+		auth := r.integer("RATE_LIMIT_AUTH_PER_MINUTE", 10, 1, 10000)
+		loginDef, registerDef, refreshDef = auth, auth, auth
 	}
+	c.RateLimit = RateLimit{
+		LoginPerMinute:           r.integer("RATE_LIMIT_LOGIN_PER_MINUTE", loginDef, 1, 10000),
+		LoginPerAccountPerMinute: r.integer("RATE_LIMIT_LOGIN_PER_ACCOUNT_PER_MINUTE", 5, 1, 10000),
+		RegisterPerMinute:        r.integer("RATE_LIMIT_REGISTER_PER_MINUTE", registerDef, 1, 10000),
+		RefreshPerMinute:         r.integer("RATE_LIMIT_REFRESH_PER_MINUTE", refreshDef, 1, 10000),
+		APIPerMinute:             r.integer("RATE_LIMIT_API_PER_MINUTE", 300, 1, 100000),
+	}
+
+	dayDur := func(key string, def, lo, hi int) time.Duration {
+		return time.Duration(r.integer(key, def, lo, hi)) * 24 * time.Hour
+	}
+	c.Retention = Retention{
+		Tombstones:     dayDur("TOMBSTONE_RETENTION_DAYS", 365, 30, 3650),
+		Operations:     dayDur("SYNC_OPERATION_RETENTION_DAYS", 30, 1, 365),
+		SecurityEvents: dayDur("SECURITY_EVENT_RETENTION_DAYS", 180, 7, 3650),
+		Sessions:       dayDur("SESSION_RETENTION_DAYS", 30, 1, 365),
+	}
+	c.MaintenanceInterval = time.Duration(r.integer("MAINTENANCE_INTERVAL_HOURS", 24, 0, 168)) * time.Hour
 
 	originPattern := regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(:\d{1,5})?$`)
 	for _, o := range strings.Split(r.str("CORS_ALLOWED_ORIGINS", ""), ",") {
@@ -386,3 +430,5 @@ func oneOf(v string, options ...string) bool {
 	}
 	return false
 }
+
+func days(d time.Duration) string { return strconv.Itoa(int(d.Hours()/24)) + " Tage" }

@@ -94,10 +94,12 @@ func testEnv(overrides map[string]string) map[string]string {
 		"JWT_SECRET":                 jwtSecret,
 		"RATE_LIMIT_AUTH_PER_MINUTE": "10000",
 		"RATE_LIMIT_API_PER_MINUTE":  "100000",
-		"LOGIN_MAX_FAILED_ATTEMPTS":  "5",
-		"INTERNAL_STATUS_TOKEN":      statusToken,
-		"API_DOCS_ENABLED":           "true",
-		"LOG_LEVEL":                  "error",
+		"RATE_LIMIT_LOGIN_PER_ACCOUNT_PER_MINUTE": "10000",
+		"MAINTENANCE_INTERVAL_HOURS":              "0",
+		"LOGIN_MAX_FAILED_ATTEMPTS":               "5",
+		"INTERNAL_STATUS_TOKEN":                   statusToken,
+		"API_DOCS_ENABLED":                        "true",
+		"LOG_LEVEL":                               "error",
 	}
 	for k, v := range overrides {
 		env[k] = v
@@ -134,7 +136,7 @@ func newEnv(t *testing.T, o ...opts) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.DB.Pool.Exec(context.Background(), `TRUNCATE users CASCADE`); err != nil {
+	if _, err := a.DB.Pool.Exec(context.Background(), `TRUNCATE users, security_events, server_state CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(a.Handler)
@@ -291,4 +293,30 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ageRow verschiebt einen Zeitstempel in die Vergangenheit, ohne den Änderungs-Trigger auszulösen
+// (sonst bekäme die Zeile eine neue Änderungsnummer – im echten Betrieb werden gelöschte
+// Datensätze nie mehr verändert).
+func ageRow(t *testing.T, e *env, table, column, interval string, id string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := e.app.DB.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	trigger := table + "_touch"
+	for _, sql := range []string{
+		"ALTER TABLE " + table + " DISABLE TRIGGER " + trigger,
+		"UPDATE " + table + " SET " + column + " = now() - interval '" + interval + "' WHERE id = '" + id + "'",
+		"ALTER TABLE " + table + " ENABLE TRIGGER " + trigger,
+	} {
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			t.Fatal(sql, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 }

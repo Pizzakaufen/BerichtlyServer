@@ -44,26 +44,18 @@ func FindProfile(ctx context.Context, q Querier, userID uuid.UUID, forUpdate boo
 	if forUpdate {
 		sql += ` FOR UPDATE`
 	}
-	p, err := scanProfile(q.QueryRow(ctx, sql, userID))
-	if IsNoRows(err) {
-		return nil, nil
-	}
-	return p, err
+	return nilIfNoRows(scanProfile(q.QueryRow(ctx, sql, userID)))
 }
 
 // UpdateProfile ändert nur, wenn die gespeicherte Version expected entspricht (nil = Versionskonflikt).
 func UpdateProfile(ctx context.Context, q Querier, userID uuid.UUID, expected int, v model.ProfileValues) (*model.Profile, error) {
-	p, err := scanProfile(q.QueryRow(ctx, `
+	return nilIfNoRows(scanProfile(q.QueryRow(ctx, `
 		UPDATE user_profiles SET name = $1, profession = $2, company = $3, department = $4, trainer_name = $5,
 			training_start = $6, training_end = $7, writing_style = $8, version = version + 1
 		WHERE user_id = $9 AND version = $10
 		RETURNING `+profileColumns,
 		v.Name, v.Profession, v.Company, v.Department, v.TrainerName,
-		dateParam(v.TrainingStart), dateParam(v.TrainingEnd), string(v.WritingStyle), userID, expected))
-	if IsNoRows(err) {
-		return nil, nil
-	}
-	return p, err
+		dateParam(v.TrainingStart), dateParam(v.TrainingEnd), string(v.WritingStyle), userID, expected)))
 }
 
 func ProfilesChangedSince(ctx context.Context, q Querier, userID uuid.UUID, cursor int64, limit int) ([]model.Profile, error) {
@@ -72,19 +64,33 @@ func ProfilesChangedSince(ctx context.Context, q Querier, userID uuid.UUID, curs
 }
 
 // ---------------------------------------------------------------------------
+// Gemeinsame Herkunftsspalten (Clientzeit, lokale ID, Geräte, Operation)
+// ---------------------------------------------------------------------------
+
+// originColumns liefert die stabilen Geräte-IDs (nicht die internen Referenzen) per Unterabfrage.
+const originColumns = `client_updated_at, client_local_id,
+	(SELECT d.device_id FROM devices d WHERE d.id = created_by_device_ref),
+	(SELECT d.device_id FROM devices d WHERE d.id = last_device_ref),
+	last_operation_id`
+
+func originTargets(o *model.Origin) []any {
+	return []any{&o.ClientUpdatedAt, &o.ClientLocalID, &o.CreatedByDeviceID, &o.LastDeviceID, &o.LastOperationID}
+}
+
+// ---------------------------------------------------------------------------
 // Tagesberichte
 // ---------------------------------------------------------------------------
 
 const dailyColumns = `id, user_id, report_date, text, note, order_index, status, version,
-	created_at, updated_at, deleted_at, change_seq`
+	created_at, updated_at, deleted_at, change_seq, ` + originColumns
 
 func scanDaily(row interface{ Scan(...any) error }) (*model.DailyReport, error) {
 	var r model.DailyReport
 	var date time.Time
 	var status string
-	err := row.Scan(&r.ID, &r.UserID, &date, &r.Values.Text, &r.Values.Note, &r.Values.OrderIndex, &status,
-		&r.Version, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt, &r.ChangeSeq)
-	if err != nil {
+	targets := append([]any{&r.ID, &r.UserID, &date, &r.Values.Text, &r.Values.Note, &r.Values.OrderIndex, &status,
+		&r.Version, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt, &r.ChangeSeq}, originTargets(&r.Origin)...)
+	if err := row.Scan(targets...); err != nil {
 		return nil, err
 	}
 	r.Values.Date = model.DateOf(date)
@@ -103,30 +109,35 @@ func (DailyStore) FindByID(ctx context.Context, tx pgx.Tx, id uuid.UUID, forUpda
 	return nilIfNoRows(scanDaily(tx.QueryRow(ctx, sql, id)))
 }
 
-func (DailyStore) Insert(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, v model.DailyValues, deviceRef *uuid.UUID) (*model.DailyReport, error) {
+func (DailyStore) Insert(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, v model.DailyValues, m model.WriteMeta) (*model.DailyReport, error) {
 	return scanDaily(tx.QueryRow(ctx, `
-		INSERT INTO daily_reports (id, user_id, report_date, text, note, order_index, status, last_device_ref)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO daily_reports (id, user_id, report_date, text, note, order_index, status,
+			created_by_device_ref, last_device_ref, last_operation_id, client_updated_at, client_local_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11)
 		RETURNING `+dailyColumns,
-		id, userID, v.Date.Time(), v.Text, v.Note, v.OrderIndex, string(v.Status), deviceRef))
+		id, userID, v.Date.Time(), v.Text, v.Note, v.OrderIndex, string(v.Status),
+		m.DeviceRef, m.OperationID, m.ClientUpdatedAt, m.ClientLocalID))
 }
 
-func (DailyStore) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, v model.DailyValues, deviceRef *uuid.UUID) (*model.DailyReport, error) {
+func (DailyStore) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, v model.DailyValues, m model.WriteMeta) (*model.DailyReport, error) {
 	return nilIfNoRows(scanDaily(tx.QueryRow(ctx, `
 		UPDATE daily_reports SET report_date = $1, text = $2, note = $3, order_index = $4, status = $5,
-			version = version + 1, last_device_ref = $6
-		WHERE id = $7 AND version = $8 AND deleted_at IS NULL
+			version = version + 1, last_device_ref = $6, last_operation_id = $7, client_updated_at = $8,
+			client_local_id = COALESCE($9, client_local_id)
+		WHERE id = $10 AND version = $11 AND deleted_at IS NULL
 		RETURNING `+dailyColumns,
-		v.Date.Time(), v.Text, v.Note, v.OrderIndex, string(v.Status), deviceRef, id, expected)))
+		v.Date.Time(), v.Text, v.Note, v.OrderIndex, string(v.Status),
+		m.DeviceRef, m.OperationID, m.ClientUpdatedAt, m.ClientLocalID, id, expected)))
 }
 
 // SoftDelete legt einen Tombstone an: Inhalt wird entfernt (Datenminimierung), ID, Datum und
-// Version bleiben für die Synchronisierung erhalten.
-func (DailyStore) SoftDelete(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, deviceRef *uuid.UUID) (*model.DailyReport, error) {
+// Version bleiben für die Synchronisierung erhalten (Aufbewahrung: TOMBSTONE_RETENTION_DAYS).
+func (DailyStore) SoftDelete(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, m model.WriteMeta) (*model.DailyReport, error) {
 	return nilIfNoRows(scanDaily(tx.QueryRow(ctx, `
-		UPDATE daily_reports SET deleted_at = now(), text = '', note = '', version = version + 1, last_device_ref = $1
-		WHERE id = $2 AND version = $3 AND deleted_at IS NULL
-		RETURNING `+dailyColumns, deviceRef, id, expected)))
+		UPDATE daily_reports SET deleted_at = now(), text = '', note = '', version = version + 1,
+			last_device_ref = $1, last_operation_id = $2, client_updated_at = $3
+		WHERE id = $4 AND version = $5 AND deleted_at IS NULL
+		RETURNING `+dailyColumns, m.DeviceRef, m.OperationID, m.ClientUpdatedAt, id, expected)))
 }
 
 func (DailyStore) FindCollision(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, model.DailyValues) (*model.DailyReport, error) {
@@ -199,15 +210,15 @@ func DailyChangedSince(ctx context.Context, q Querier, userID uuid.UUID, cursor 
 // ---------------------------------------------------------------------------
 
 const weeklyColumns = `id, user_id, week_start, content, status, generated_at, version,
-	created_at, updated_at, deleted_at, change_seq`
+	created_at, updated_at, deleted_at, change_seq, ` + originColumns
 
 func scanWeekly(row interface{ Scan(...any) error }) (*model.WeeklyReport, error) {
 	var r model.WeeklyReport
 	var start time.Time
 	var status string
-	err := row.Scan(&r.ID, &r.UserID, &start, &r.Values.Content, &status, &r.Values.GeneratedAt, &r.Version,
-		&r.CreatedAt, &r.UpdatedAt, &r.DeletedAt, &r.ChangeSeq)
-	if err != nil {
+	targets := append([]any{&r.ID, &r.UserID, &start, &r.Values.Content, &status, &r.Values.GeneratedAt, &r.Version,
+		&r.CreatedAt, &r.UpdatedAt, &r.DeletedAt, &r.ChangeSeq}, originTargets(&r.Origin)...)
+	if err := row.Scan(targets...); err != nil {
 		return nil, err
 	}
 	r.Values.Week = model.IsoWeek{Start: model.DateOf(start)}
@@ -226,33 +237,35 @@ func (WeeklyStore) FindByID(ctx context.Context, tx pgx.Tx, id uuid.UUID, forUpd
 	return nilIfNoRows(scanWeekly(tx.QueryRow(ctx, sql, id)))
 }
 
-func (WeeklyStore) Insert(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, v model.WeeklyValues, deviceRef *uuid.UUID) (*model.WeeklyReport, error) {
+func (WeeklyStore) Insert(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, v model.WeeklyValues, m model.WriteMeta) (*model.WeeklyReport, error) {
 	year, week := v.Week.ISO()
 	return scanWeekly(tx.QueryRow(ctx, `
 		INSERT INTO weekly_reports (id, user_id, week_start, week_end, iso_year, iso_week, content, status,
-			generated_at, last_device_ref)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			generated_at, created_by_device_ref, last_device_ref, last_operation_id, client_updated_at, client_local_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, $12, $13)
 		RETURNING `+weeklyColumns,
 		id, userID, v.Week.Start.Time(), v.Week.End().Time(), year, week, v.Content, string(v.Status),
-		v.GeneratedAt, deviceRef))
+		v.GeneratedAt, m.DeviceRef, m.OperationID, m.ClientUpdatedAt, m.ClientLocalID))
 }
 
-func (WeeklyStore) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, v model.WeeklyValues, deviceRef *uuid.UUID) (*model.WeeklyReport, error) {
+func (WeeklyStore) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, v model.WeeklyValues, m model.WriteMeta) (*model.WeeklyReport, error) {
 	year, week := v.Week.ISO()
 	return nilIfNoRows(scanWeekly(tx.QueryRow(ctx, `
 		UPDATE weekly_reports SET week_start = $1, week_end = $2, iso_year = $3, iso_week = $4, content = $5,
-			status = $6, generated_at = $7, version = version + 1, last_device_ref = $8
-		WHERE id = $9 AND version = $10 AND deleted_at IS NULL
+			status = $6, generated_at = $7, version = version + 1, last_device_ref = $8, last_operation_id = $9,
+			client_updated_at = $10, client_local_id = COALESCE($11, client_local_id)
+		WHERE id = $12 AND version = $13 AND deleted_at IS NULL
 		RETURNING `+weeklyColumns,
 		v.Week.Start.Time(), v.Week.End().Time(), year, week, v.Content, string(v.Status), v.GeneratedAt,
-		deviceRef, id, expected)))
+		m.DeviceRef, m.OperationID, m.ClientUpdatedAt, m.ClientLocalID, id, expected)))
 }
 
-func (WeeklyStore) SoftDelete(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, deviceRef *uuid.UUID) (*model.WeeklyReport, error) {
+func (WeeklyStore) SoftDelete(ctx context.Context, tx pgx.Tx, id uuid.UUID, expected int, m model.WriteMeta) (*model.WeeklyReport, error) {
 	return nilIfNoRows(scanWeekly(tx.QueryRow(ctx, `
-		UPDATE weekly_reports SET deleted_at = now(), content = '', version = version + 1, last_device_ref = $1
-		WHERE id = $2 AND version = $3 AND deleted_at IS NULL
-		RETURNING `+weeklyColumns, deviceRef, id, expected)))
+		UPDATE weekly_reports SET deleted_at = now(), content = '', version = version + 1,
+			last_device_ref = $1, last_operation_id = $2, client_updated_at = $3
+		WHERE id = $4 AND version = $5 AND deleted_at IS NULL
+		RETURNING `+weeklyColumns, m.DeviceRef, m.OperationID, m.ClientUpdatedAt, id, expected)))
 }
 
 // FindCollision liefert einen anderen aktiven Wochenbericht derselben Woche.

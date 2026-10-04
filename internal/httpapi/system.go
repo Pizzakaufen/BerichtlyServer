@@ -12,6 +12,7 @@ import (
 	"berichtly-server/api"
 	"berichtly-server/internal/apperr"
 	"berichtly-server/internal/model"
+	"berichtly-server/internal/store"
 )
 
 // health ist der öffentliche Health-Check. Er verrät bewusst nur Zustände ("up"/"down") – keine
@@ -28,6 +29,31 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	writeData(w, code, map[string]any{
 		"status":     status,
 		"components": map[string]string{"api": "up", "database": dbState},
+	})
+}
+
+// ready meldet Bereitschaft für Anfragen: Datenbank erreichbar und alle Migrationen dieser
+// Programmversion angewendet. Für Docker/Load-Balancer/Monitoring (1.1).
+func (a *API) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	dbState, schemaState := "down", "unknown"
+	if a.db.Ping(ctx) == nil {
+		dbState = "up"
+		if v, err := a.db.SchemaVersion(ctx); err == nil {
+			schemaState = "outdated"
+			if v >= store.LatestSchemaVersion() {
+				schemaState = "current"
+			}
+		}
+	}
+	status, code := "ready", http.StatusOK
+	if dbState != "up" || schemaState != "current" {
+		status, code = "not_ready", http.StatusServiceUnavailable
+	}
+	writeData(w, code, map[string]any{
+		"status":     status,
+		"components": map[string]string{"api": "up", "database": dbState, "schema": schemaState},
 	})
 }
 

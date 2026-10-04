@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"berichtly-server/internal/store"
 )
 
 func TestHealthCheckOhneSensibleInformationen(t *testing.T) {
@@ -48,7 +50,7 @@ func TestInternerStatusNurMitToken(t *testing.T) {
 	e.get("/internal/status", "").expect(404)
 	e.get("/internal/status", "falsches-token").expect(404)
 	r := e.get("/internal/status", statusToken).expect(200)
-	if r.str("data", "database", "state") != "UP" || r.num("data", "database", "schemaVersion") != 1 || r.num("data", "metrics", "requestsTotal") < 1 {
+	if r.str("data", "database", "state") != "UP" || r.num("data", "database", "schemaVersion") != store.LatestSchemaVersion() || r.num("data", "metrics", "requestsTotal") < 1 {
 		t.Fatal(r.Raw)
 	}
 
@@ -134,11 +136,11 @@ func TestDatenbankConstraintsUndTrigger(t *testing.T) {
 		t.Fatal("Kaskade beim Löschen eines Kontos fehlgeschlagen")
 	}
 
-	// Erneutes Migrieren ist ein No-op; die Schema-Version bleibt 1.
+	// Erneutes Migrieren ist ein No-op; die Schema-Version bleibt aktuell.
 	if n, err := e.app.DB.Migrate(ctx, e.app.Log); err != nil || n != 0 {
 		t.Fatal(n, err)
 	}
-	if v, _ := e.app.DB.SchemaVersion(ctx); v != 1 {
+	if v, _ := e.app.DB.SchemaVersion(ctx); v != store.LatestSchemaVersion() {
 		t.Fatal(v)
 	}
 }

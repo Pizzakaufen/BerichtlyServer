@@ -68,6 +68,13 @@ func (db *DB) Tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	return pgx.BeginTxFunc(ctx, db.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, fn)
 }
 
+// Snapshot führt fn in einer lesenden Transaktion mit genau einem konsistenten Datenbank-Snapshot
+// aus (REPEATABLE READ). Nötig, wenn mehrere Abfragen zusammen ein widerspruchsfreies Bild ergeben
+// müssen – z. B. beim Synchronisations-Pull über mehrere Tabellen.
+func (db *DB) Snapshot(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	return pgx.BeginTxFunc(ctx, db.Pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, fn)
+}
+
 // LockUser sperrt die Benutzerzeile bis zum Ende der Transaktion. Damit werden alle
 // Schreibvorgänge eines Kontos serialisiert und Änderungsnummern in Commit-Reihenfolge vergeben
 // (siehe docs/SYNC.md).

@@ -17,7 +17,7 @@ import (
 )
 
 // Version wird beim Bauen per -ldflags gesetzt.
-var Version = "1.0.0-alpha"
+var Version = "1.1.0"
 
 type App struct {
 	Cfg      *config.Config
@@ -26,6 +26,7 @@ type App struct {
 	Auth     *service.Auth
 	Reports  *service.Reports
 	Profiles *service.Profiles
+	Sync     *service.Sync
 	Handler  http.Handler
 }
 
@@ -68,6 +69,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, now func() t
 	}
 	reports := service.NewReports(db, now)
 	profiles := &service.Profiles{DB: db}
+	syncSvc := &service.Sync{DB: db, Reports: reports, Profiles: profiles, Now: now, Log: log}
 	handler := httpapi.New(httpapi.Deps{
 		Config:   cfg,
 		DB:       db,
@@ -76,9 +78,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, now func() t
 		Account:  &service.Account{DB: db},
 		Profiles: profiles,
 		Reports:  reports,
-		Sync:     &service.Sync{DB: db, Reports: reports, Profiles: profiles, Now: now, Log: log},
-		Devices:  &service.Devices{DB: db},
+		Sync:     syncSvc,
+		Devices:  &service.Devices{DB: db, Log: log},
 		Version:  Version,
 	})
-	return &App{Cfg: cfg, DB: db, Log: log, Auth: auth, Reports: reports, Profiles: profiles, Handler: handler}, nil
+	return &App{Cfg: cfg, DB: db, Log: log, Auth: auth, Reports: reports, Profiles: profiles, Sync: syncSvc, Handler: handler}, nil
 }

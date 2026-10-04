@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,10 +20,37 @@ const (
 	DailyNoteMax     = 2000
 	OrderIndexMax    = 10000
 	WeeklyContentMax = 50000
+	ClientLocalIDMax = 64
 )
+
+// ClientInfo sind optionale Angaben des Geräts zur Herkunft einer Änderung. Sie werden gespeichert
+// und zurückgegeben, aber nie für Entscheidungen verwendet (der Server vertraut der Geräteuhr nicht).
+type ClientInfo struct {
+	// Änderungszeitpunkt laut Gerät (ISO-8601).
+	ClientUpdatedAt *string `json:"clientUpdatedAt"`
+	// Lokale ID des Datensatzes auf dem Gerät (z. B. Room-ID), max. 64 Zeichen.
+	ClientLocalID *string `json:"clientLocalId"`
+}
+
+var clientLocalIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
+
+// Meta prüft die Clientangaben und baut die Metadaten einer Schreiboperation.
+func (c ClientInfo) Meta(v *validate.V, deviceRef, operationID *uuid.UUID) model.WriteMeta {
+	m := model.WriteMeta{DeviceRef: deviceRef, OperationID: operationID}
+	m.ClientUpdatedAt, _ = v.Timestamp("clientUpdatedAt", c.ClientUpdatedAt)
+	if c.ClientLocalID != nil {
+		if clientLocalIDPattern.MatchString(*c.ClientLocalID) {
+			m.ClientLocalID = c.ClientLocalID
+		} else {
+			v.Add("clientLocalId", "invalid_value:[A-Za-z0-9._:-]{1,64}")
+		}
+	}
+	return m
+}
 
 // DailyReportRequest ist der Inhalt eines Tagesberichts für Erstellen (optional mit Client-ID) und
 // Ersetzen (mit `version` als Basisversion). Felder sind Zeiger, damit fehlende Werte erkannt werden.
+// Servergenerierte Felder (createdAt, updatedAt, deleted …) werden ignoriert.
 type DailyReportRequest struct {
 	ID         *string `json:"id"`
 	Version    *int    `json:"version"`
@@ -31,6 +59,7 @@ type DailyReportRequest struct {
 	Note       *string `json:"note"`
 	OrderIndex *int    `json:"orderIndex"`
 	Status     *string `json:"status"`
+	ClientInfo
 }
 
 func (r DailyReportRequest) Values(v *validate.V) model.DailyValues {
@@ -54,6 +83,7 @@ type WeeklyReportRequest struct {
 	Content     *string `json:"content"`
 	Status      *string `json:"status"`
 	GeneratedAt *string `json:"generatedAt"`
+	ClientInfo
 }
 
 func (r WeeklyReportRequest) Values(v *validate.V) model.WeeklyValues {
@@ -116,15 +146,17 @@ func (s *Reports) ListWeekly(ctx context.Context, userID uuid.UUID, f store.Repo
 type WeekOverview struct {
 	Week     model.IsoWeek
 	Timezone string
+	Today    model.Date // "heute" in der Zeitzone des Benutzers
 	Daily    []model.DailyReport
 	Weekly   *model.WeeklyReport
 }
 
 // Week liefert die Woche, die date enthält. Ohne Datum wird "heute" in der Zeitzone des Benutzers
-// bestimmt – nie in der Zeitzone des Servers.
+// bestimmt – nie in der Zeitzone des Servers. Sommer-/Winterzeit wird über die IANA-Zeitzone
+// korrekt berücksichtigt, da nur das Kalenderdatum, nie eine Uhrzeit, in die Wochenberechnung eingeht.
 func (s *Reports) Week(ctx context.Context, userID uuid.UUID, date *model.Date) (*WeekOverview, error) {
 	var out WeekOverview
-	err := s.DB.Tx(ctx, func(tx pgx.Tx) error {
+	err := s.DB.Snapshot(ctx, func(tx pgx.Tx) error {
 		user, err := store.FindUserByID(ctx, tx, userID)
 		if err != nil {
 			return err
@@ -132,11 +164,8 @@ func (s *Reports) Week(ctx context.Context, userID uuid.UUID, date *model.Date) 
 		if user == nil {
 			return apperr.NotFound("Konto")
 		}
-		loc, err := time.LoadLocation(user.Timezone)
-		if err != nil {
-			loc = time.UTC
-		}
-		day := model.DateOf(s.Now().In(loc))
+		out.Today = TodayIn(s.Now(), user.Timezone)
+		day := out.Today
 		if date != nil {
 			day = *date
 		}
@@ -149,4 +178,13 @@ func (s *Reports) Week(ctx context.Context, userID uuid.UUID, date *model.Date) 
 		return err
 	})
 	return &out, err
+}
+
+// TodayIn liefert das Kalenderdatum eines Zeitpunkts in der angegebenen IANA-Zeitzone.
+func TodayIn(now time.Time, timezone string) model.Date {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	return model.DateOf(now.In(loc))
 }
