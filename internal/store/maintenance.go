@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -48,20 +49,75 @@ func InsertOperation(ctx context.Context, q Querier, userID, operationID uuid.UU
 // Serverzustand
 // ---------------------------------------------------------------------------
 
-const keyMinValidCursor = "sync_min_valid_cursor"
+const (
+	keyMinValidCursor = "sync_min_valid_cursor"
+	keyCursorEpoch    = "sync_cursor_epoch"
+)
 
-// MinValidCursor ist die Untergrenze gültiger Sync-Cursor. Ältere Cursor können Löschungen
-// verpasst haben, deren Tombstones bereits bereinigt wurden; das Gerät muss neu synchronisieren.
-func MinValidCursor(ctx context.Context, q Querier) (int64, error) {
-	var raw string
-	err := q.QueryRow(ctx, `SELECT value FROM server_state WHERE key = $1`, keyMinValidCursor).Scan(&raw)
-	if IsNoRows(err) {
-		return 0, nil
-	}
+// CursorState beschreibt, welche Sync-Cursor gültig sind.
+//
+// Epoch steigt bei jeder Tombstone-Bereinigung, die Löschinformationen entfernt, und beim
+// Zurücksetzen nach einer Wiederherstellung. Ein Cursor der aktuellen Epoche ist immer gültig
+// (auch ein numerisch kleiner Zwischen-Cursor einer Neusynchronisierung). Ein Cursor einer älteren
+// Epoche ist nur gültig, wenn er mindestens MinValid ist, das Gerät also alle bereinigten
+// Löschungen bereits kannte.
+type CursorState struct {
+	MinValid int64
+	Epoch    int64
+}
+
+func LoadCursorState(ctx context.Context, q Querier) (CursorState, error) {
+	var s CursorState
+	rows, err := q.Query(ctx, `SELECT key, value FROM server_state WHERE key IN ($1, $2)`, keyMinValidCursor, keyCursorEpoch)
 	if err != nil {
-		return 0, err
+		return s, err
 	}
-	return strconv.ParseInt(raw, 10, 64)
+	defer rows.Close()
+	for rows.Next() {
+		var key, raw string
+		if err := rows.Scan(&key, &raw); err != nil {
+			return s, err
+		}
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return s, fmt.Errorf("ungültiger Serverzustand %s: %w", key, err)
+		}
+		if key == keyMinValidCursor {
+			s.MinValid = v
+		} else {
+			s.Epoch = v
+		}
+	}
+	return s, rows.Err()
+}
+
+func saveCursorState(ctx context.Context, q Querier, s CursorState) error {
+	_, err := q.Exec(ctx, `INSERT INTO server_state (key, value) VALUES ($1, $2), ($3, $4)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		keyMinValidCursor, strconv.FormatInt(s.MinValid, 10), keyCursorEpoch, strconv.FormatInt(s.Epoch, 10))
+	return err
+}
+
+// InvalidateSyncCursors erklärt alle bisher ausgestellten Sync-Cursor für ungültig. Nötig nach dem
+// Einspielen eines Backups: Die Änderungsnummern springen dabei zurück, und Geräte mit einem
+// "neueren" Cursor würden sonst neue Änderungen übersehen. Die Sequenz wird weit nach vorne
+// gesetzt, damit alle neuen Änderungen über jedem jemals ausgestellten Cursor liegen.
+func (db *DB) InvalidateSyncCursors(ctx context.Context) error {
+	return db.Tx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, maintenanceLockID); err != nil {
+			return err
+		}
+		state, err := LoadCursorState(ctx, tx)
+		if err != nil {
+			return err
+		}
+		var jumped int64
+		if err := tx.QueryRow(ctx, `SELECT setval('sync_change_seq',
+			(SELECT last_value FROM sync_change_seq) + 1000000000000)`).Scan(&jumped); err != nil {
+			return err
+		}
+		return saveCursorState(ctx, tx, CursorState{MinValid: jumped, Epoch: state.Epoch + 1})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -119,15 +175,15 @@ func (db *DB) RunMaintenance(ctx context.Context, r Retention) (MaintenanceResul
 			return err
 		}
 		res.TombstonesPurged += weeklyCount
-		current, err := MinValidCursor(ctx, tx)
+		state, err := LoadCursorState(ctx, tx)
 		if err != nil {
 			return err
 		}
-		res.MinValidCursor = max(current, maxDaily, maxWeekly)
-		if res.MinValidCursor > current {
-			if _, err := tx.Exec(ctx, `INSERT INTO server_state (key, value) VALUES ($1, $2)
-				ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-				keyMinValidCursor, strconv.FormatInt(res.MinValidCursor, 10)); err != nil {
+		res.MinValidCursor = max(state.MinValid, maxDaily, maxWeekly)
+		if res.MinValidCursor > state.MinValid {
+			// Neue Epoche: Cursor, die vor dieser Bereinigung ausgestellt wurden und unter der neuen
+			// Untergrenze liegen, könnten gelöschte Berichte verpasst haben.
+			if err := saveCursorState(ctx, tx, CursorState{MinValid: res.MinValidCursor, Epoch: state.Epoch + 1}); err != nil {
 				return err
 			}
 		}

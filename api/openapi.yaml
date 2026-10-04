@@ -1,40 +1,58 @@
 openapi: 3.0.3
 info:
   title: Berichtly Server API
-  version: 1.0.0-alpha
+  version: 1.1.0
   description: |
-    REST-API des Berichtly Servers (Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App).
+    REST-API des Berichtly Servers – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App.
 
-    **Konventionen**
-    - Alle Endpunkte liegen unter `/api/v1`. Inkompatible Änderungen erscheinen später unter `/api/v2`.
-    - Erfolgreiche Antworten: `{"data": ...}`, Listen zusätzlich `{"meta": {page, limit, total, hasMore}}`.
-    - Fehler: `{"error": {"code", "message", "requestId", "details", "conflict"}}` mit stabilem, maschinenlesbarem `code`.
-    - Zeitpunkte: UTC, ISO-8601 mit Millisekunden (`2026-10-05T08:15:00.000Z`). Kalenderdaten: `YYYY-MM-DD`,
-      interpretiert in der Zeitzone des Benutzers.
-    - IDs sind UUIDs. Clients dürfen beim Erstellen eigene UUIDs vergeben (idempotente Wiederholung).
+    ## Konventionen
+    - Alle Endpunkte liegen unter `/api/v1`. Inkompatible Änderungen erscheinen später unter `/api/v2`;
+      v1 bleibt dann für bestehende App-Versionen erhalten. 1.1 hat v1 nur kompatibel erweitert
+      (neue Endpunkte, neue optionale Felder) – siehe docs/UPGRADE.md.
+    - Erfolgreiche Antworten: `{"data": ...}`. Listen zusätzlich `{"meta": {page, limit, total, hasMore}}`.
+    - Fehler: `{"error": {"code", "message", "requestId", "details", "conflict"}}` mit stabilem `code`.
+      Es werden nie Stacktraces, SQL oder interne Pfade gesendet.
+    - Zeitpunkte: UTC, ISO-8601 mit Millisekunden (`2026-10-05T08:15:00.000Z`) und immer **Serverzeit**.
+      Vom Gerät gemeldete Zeiten stehen getrennt in `clientUpdatedAt` und werden nie für Entscheidungen genutzt.
+    - Kalenderdaten: `YYYY-MM-DD`, interpretiert in der Zeitzone des Kontos (z. B. `Europe/Berlin`).
+    - IDs sind UUIDs. Berichts-IDs vergibt idealerweise das Gerät (stabil, bei Wiederholung identisch).
+    - Felder mit `readOnly: true` erzeugt der Server; vom Client gesendete Werte werden ignoriert.
+    - Unbekannte Felder in Anfragen werden ignoriert (Vorwärtskompatibilität).
     - Jede Antwort enthält `X-Request-ID`; ein gültiger Wert des Clients (8–64 Zeichen `[A-Za-z0-9_-]`) wird übernommen.
-    - Unbekannte Felder in Anfragen werden ignoriert.
 
-    **Authentifizierung**: `Authorization: Bearer <accessToken>`. Access Tokens gelten standardmäßig 15 Minuten.
-    Refresh Tokens werden bei jeder Erneuerung ausgetauscht; die erneute Verwendung eines alten Refresh Tokens
-    beendet die Sitzung.
+    ## Pagination
+    - Listen (Berichte, Geräte, Sitzungen, Sicherheitsereignisse): `page` (ab 1) und `limit` (1–100, Standard 50),
+      Antwort mit `meta.total` und `meta.hasMore`.
+    - Synchronisierung: Cursor-basiert (`cursor`/`nextCursor`, `hasMore`) – stabil auch bei gleichzeitigen Änderungen.
+      Cursor sind undurchsichtige Strings (`"1043"` bzw. ab der ersten Bereinigung `"1043.2"`) und werden unverändert
+      zurückgegeben. `410 SYNC_CURSOR_EXPIRED` bedeutet: vollständig neu synchronisieren (`cursor=0`).
 
-    **Optimistische Sperre**: Ändern und Löschen benötigen die Version, auf der die Änderung basiert. Weicht die
-    Serverversion ab, antwortet der Server mit `409 CONFLICT` und dem aktuellen Serverstand – es wird nichts überschrieben.
+    ## Authentifizierung
+    `Authorization: Bearer <accessToken>`. Access Tokens gelten standardmäßig 15 Minuten. Refresh Tokens werden bei
+    jeder Erneuerung ausgetauscht; die erneute Verwendung eines alten Refresh Tokens beendet die Sitzung.
+    Refresh-Aufrufe nie parallel ausführen.
+
+    ## Optimistische Sperre und Konflikte
+    Ändern und Löschen benötigen die Version, auf der die Änderung basiert. Weicht die Serverversion ab, antwortet
+    der Server mit `409 CONFLICT` (REST) bzw. `status: CONFLICT` (Sync) und dem aktuellen Serverstand –
+    es wird nie stillschweigend überschrieben ("kein Last-Write-Wins").
+
+    ## Rate Limiting
+    Überschreitungen werden mit `429 RATE_LIMITED` und Header `Retry-After` (Sekunden) beantwortet.
 servers:
   - url: /
 security:
   - bearerAuth: []
 tags:
-  - name: System
-  - name: Auth
-  - name: Konto
-  - name: Profil
-  - name: Tagesberichte
-  - name: Wochenberichte
-  - name: Wochen
-  - name: Synchronisierung
-  - name: Geräte
+  - { name: System, description: Health-, Liveness- und Readiness-Prüfungen }
+  - { name: Auth, description: Registrierung, Anmeldung, Token-Erneuerung, Abmeldung }
+  - { name: Konto, description: Konto, Passwort, Sitzungen, Sicherheitsereignisse }
+  - { name: Profil }
+  - { name: Tagesberichte }
+  - { name: Wochenberichte }
+  - { name: Wochen }
+  - { name: Synchronisierung }
+  - { name: Geräte }
 
 paths:
   /api/v1/health:
@@ -43,34 +61,46 @@ paths:
       summary: Health-Check (Server und Datenbank)
       security: []
       responses:
-        "200": { description: Gesund, content: { application/json: { schema: { $ref: "#/components/schemas/HealthResponse" } } } }
-        "503": { description: Datenbank nicht erreichbar, content: { application/json: { schema: { $ref: "#/components/schemas/HealthResponse" } } } }
+        "200": { description: Gesund, content: { application/json: { schema: { $ref: "#/components/schemas/HealthEnvelope" } } } }
+        "503": { description: Datenbank nicht erreichbar, content: { application/json: { schema: { $ref: "#/components/schemas/HealthEnvelope" } } } }
   /api/v1/health/live:
     get:
       tags: [System]
-      summary: Liveness (Prozess antwortet, ohne Datenbankprüfung)
+      summary: Liveness – Prozess antwortet (ohne Datenbankprüfung)
       security: []
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/HealthResponse" } } } }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/HealthEnvelope" } } } }
+  /api/v1/health/ready:
+    get:
+      tags: [System]
+      summary: Readiness – Datenbank erreichbar und Schema aktuell (1.1)
+      security: []
+      responses:
+        "200": { description: Bereit, content: { application/json: { schema: { $ref: "#/components/schemas/HealthEnvelope" } } } }
+        "503": { description: Nicht bereit, content: { application/json: { schema: { $ref: "#/components/schemas/HealthEnvelope" } } } }
 
   /api/v1/auth/register:
     post:
       tags: [Auth]
       summary: Konto registrieren
-      description: Rate-limitiert. Abschaltbar mit `REGISTRATION_ENABLED=false`.
+      description: Rate-limitiert (RATE_LIMIT_REGISTER_PER_MINUTE). Abschaltbar mit REGISTRATION_ENABLED=false.
       security: []
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RegisterRequest" } } } }
       responses:
         "201": { description: Konto angelegt, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/ValidationError" }
-        "429": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/auth/login:
     post:
       tags: [Auth]
-      summary: Anmelden
-      description: Rate-limitiert; nach zu vielen Fehlversuchen wird das Konto vorübergehend gesperrt (`ACCOUNT_TEMPORARILY_LOCKED`).
+      summary: Anmelden (optional mit Geräteangabe)
+      description: |
+        Rate-limitiert pro IP (RATE_LIMIT_LOGIN_PER_MINUTE) und pro Konto (RATE_LIMIT_LOGIN_PER_ACCOUNT_PER_MINUTE).
+        Nach zu vielen Fehlversuchen wird das Konto vorübergehend gesperrt (`ACCOUNT_TEMPORARILY_LOCKED`).
+        Mit `device` wird die Sitzung an ein Gerät gebunden (für Geräteverwaltung und Sync-Status).
       security: []
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
       responses:
@@ -78,7 +108,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/ValidationError" }
-        "429": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/auth/refresh:
     post:
       tags: [Auth]
@@ -92,13 +122,25 @@ paths:
       responses:
         "200": { description: Neues Token-Paar, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
         "401": { $ref: "#/components/responses/Error" }
-        "429": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/auth/logout:
     post:
       tags: [Auth]
-      summary: Aktuelle Sitzung beenden (Access und Refresh Token werden sofort ungültig)
+      summary: Aktuelle Sitzung beenden (Access und Refresh Token sofort ungültig)
       responses:
         "204": { description: Abgemeldet }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout-all:
+    post:
+      tags: [Auth]
+      summary: Alle Sitzungen auf allen Geräten beenden (1.1)
+      responses:
+        "200":
+          description: Abgemeldet
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { type: object, properties: { revokedSessions: { type: integer } } } } }
         "401": { $ref: "#/components/responses/Error" }
 
   /api/v1/account:
@@ -112,10 +154,68 @@ paths:
       summary: Kontoeinstellungen ändern (Zeitzone)
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, properties: { timezone: { type: string, example: Europe/Berlin } } } } }
+        content: { application/json: { schema: { type: object, properties: { timezone: { type: string, example: Europe/Berlin, description: IANA-Zeitzone } } } } }
       responses:
         "200": { description: Konto, content: { application/json: { schema: { $ref: "#/components/schemas/AccountEnvelope" } } } }
         "422": { $ref: "#/components/responses/ValidationError" }
+  /api/v1/account/password:
+    post:
+      tags: [Konto]
+      summary: Passwort ändern (1.1)
+      description: Widerruft alle anderen Sitzungen des Kontos; die aktuelle Sitzung bleibt bestehen. Rate-limitiert.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 10, maxLength: 128 }
+      responses:
+        "204": { description: Geändert }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/account/security-events:
+    get:
+      tags: [Konto]
+      summary: Eigene Sicherheitsereignisse (neueste zuerst, 1.1)
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200":
+          description: Ereignisse
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/SecurityEvent" } }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+  /api/v1/sessions:
+    get:
+      tags: [Konto]
+      summary: Aktive Sitzungen des Kontos (1.1)
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200":
+          description: Sitzungen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Session" } }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+  /api/v1/sessions/{id}:
+    delete:
+      tags: [Konto]
+      summary: Eine eigene Sitzung beenden (1.1)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "204": { description: Beendet }
+        "404": { $ref: "#/components/responses/Error" }
 
   /api/v1/profile:
     get:
@@ -136,10 +236,15 @@ paths:
     get:
       tags: [Tagesberichte]
       summary: Eigene Tagesberichte auflisten (gefiltert, paginiert)
+      description: Zeitraumfilter werden kombiniert (Schnittmenge). Gelöschte Berichte erscheinen nicht.
       parameters:
         - { name: date, in: query, schema: { type: string, format: date } }
         - { name: from, in: query, schema: { type: string, format: date }, description: inklusive }
         - { name: to, in: query, schema: { type: string, format: date }, description: inklusive }
+        - { name: year, in: query, schema: { type: integer, minimum: 2000, maximum: 2100 }, description: Kalenderjahr (1.1) }
+        - { name: month, in: query, schema: { type: integer, minimum: 1, maximum: 12 }, description: Monat, nur mit year (1.1) }
+        - { name: isoYear, in: query, schema: { type: integer }, description: ISO-Wochenjahr, nur mit isoWeek (1.1) }
+        - { name: isoWeek, in: query, schema: { type: integer, minimum: 1, maximum: 53 }, description: ISO-Kalenderwoche (1.1) }
         - { name: status, in: query, schema: { type: string }, description: "Kommagetrennt, z. B. DRAFT,EDITED" }
         - { name: sort, in: query, schema: { type: string, enum: [date_desc, date_asc], default: date_desc } }
         - { $ref: "#/components/parameters/Page" }
@@ -190,6 +295,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/Version" }]
       responses:
         "204": { description: Gelöscht }
+        "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Conflict" }
 
@@ -200,6 +306,10 @@ paths:
       parameters:
         - { name: from, in: query, schema: { type: string, format: date }, description: Wochen, die den Zeitraum überschneiden }
         - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: month, in: query, schema: { type: integer, minimum: 1, maximum: 12 } }
+        - { name: isoYear, in: query, schema: { type: integer } }
+        - { name: isoWeek, in: query, schema: { type: integer, minimum: 1, maximum: 53 } }
         - { name: status, in: query, schema: { type: string } }
         - { name: sort, in: query, schema: { type: string, enum: [date_desc, date_asc] } }
         - { $ref: "#/components/parameters/Page" }
@@ -263,7 +373,44 @@ paths:
       responses:
         "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /api/v1/weeks/{isoYear}/{isoWeek}:
+    get:
+      tags: [Wochen]
+      summary: Woche nach ISO-Kalenderwoche, z. B. /weeks/2026/41 (1.1)
+      parameters:
+        - { name: isoYear, in: path, required: true, schema: { type: integer } }
+        - { name: isoWeek, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 53 } }
+      responses:
+        "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
+        "400": { $ref: "#/components/responses/Error" }
 
+  /api/v1/sync:
+    post:
+      tags: [Synchronisierung]
+      summary: Synchronisationsschritt – lokale Änderungen hochladen und Serveränderungen abrufen (1.1)
+      description: |
+        Wendet zuerst `changes` an (jede Änderung einzeln und atomar, idempotent über `operationId`) und liefert
+        danach die Serveränderungen ab `cursor`. Eigene Änderungen dieses Schritts sind mit `echo: true` markiert.
+        Bei `pull.hasMore = true` weitere Seiten über `GET /sync/changes` abrufen, zum Schluss `POST /sync/complete`.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SyncRequest" } } } }
+      responses:
+        "200": { description: Ergebnis, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncResponse" } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/CursorExpired" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /api/v1/sync/complete:
+    post:
+      tags: [Synchronisierung]
+      summary: Ergebnis eines Synchronisationsvorgangs melden (1.1)
+      description: |
+        Erfordert eine an ein Gerät gebundene Sitzung (Login mit `device` oder `POST /devices`), sonst `409 DEVICE_REQUIRED`.
+        SUCCESS speichert Zeitpunkt und Cursor der letzten erfolgreichen Synchronisierung (Status CONFLICT bei
+        `unresolvedConflicts > 0`). FAILED wird nie als Erfolg gespeichert.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SyncCompleteRequest" } } } }
+      responses:
+        "200": { description: Neuer Gerätestatus, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncDeviceStatus" } } } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
   /api/v1/sync/changes:
     get:
       tags: [Synchronisierung]
@@ -274,6 +421,7 @@ paths:
       responses:
         "200": { description: Änderungen, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncPullResponse" } } } } } }
         "400": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/CursorExpired" }
   /api/v1/sync/push:
     post:
       tags: [Synchronisierung]
@@ -285,21 +433,67 @@ paths:
   /api/v1/sync/status:
     get:
       tags: [Synchronisierung]
-      summary: Synchronisationsstand (Server-Cursor, letzter Pull/Push dieses Geräts)
+      summary: Synchronisationsstand (Server-Cursor, gültiger Mindest-Cursor, Gerätestatus)
       responses:
         "200": { description: Status, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncStatus" } } } } } }
 
   /api/v1/devices:
+    post:
+      tags: [Geräte]
+      summary: Gerät registrieren und aktuelle Sitzung daran binden (1.1)
+      description: Idempotent über die stabile Geräte-ID. Ein abgemeldetes Gerät wird dadurch wieder aktiv.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceInfo" } } } }
+      responses:
+        "201": { description: Neu registriert, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
+        "200": { description: Bereits bekannt, aktualisiert, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
+        "422": { $ref: "#/components/responses/ValidationError" }
     get:
       tags: [Geräte]
-      summary: Eigene Geräte auflisten
+      summary: Eigene Geräte auflisten (paginiert)
+      parameters:
+        - { name: includeRevoked, in: query, schema: { type: boolean, default: false }, description: Auch abgemeldete Geräte (1.1) }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Limit" }
       responses:
-        "200": { description: Geräte, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } }
+        "200":
+          description: Geräte
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Device" } }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
   /api/v1/devices/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Geräte]
+      summary: Eigenes Gerät abrufen (1.1)
+      responses:
+        "200": { description: Gerät, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [Geräte]
+      summary: Geräteangaben ändern (1.1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Nicht gesendete Felder bleiben unverändert.
+              properties:
+                name: { type: string, maxLength: 100 }
+                platform: { type: string, maxLength: 32 }
+                osVersion: { type: string, maxLength: 32 }
+                appVersion: { type: string, maxLength: 32 }
+      responses:
+        "200": { description: Gerät, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
     delete:
       tags: [Geräte]
-      summary: Gerät abmelden (alle Sitzungen des Geräts widerrufen; Daten bleiben erhalten)
-      parameters: [{ $ref: "#/components/parameters/Id" }]
+      summary: Gerät abmelden (alle Sitzungen des Geräts widerrufen; Berichte bleiben erhalten)
       responses:
         "204": { description: Abgemeldet }
         "404": { $ref: "#/components/responses/Error" }
@@ -311,7 +505,7 @@ components:
   parameters:
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     Version: { name: version, in: query, required: true, description: Basisversion, schema: { type: integer, minimum: 1 } }
-    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 100000, default: 1 } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
 
   responses:
@@ -324,12 +518,20 @@ components:
     Conflict:
       description: Konflikt (`CONFLICT`) mit aktuellem Serverstand in `error.conflict`
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    RateLimited:
+      description: Zu viele Anfragen (`RATE_LIMITED`) bzw. Konto vorübergehend gesperrt (`ACCOUNT_TEMPORARILY_LOCKED`)
+      headers: { Retry-After: { schema: { type: integer }, description: Sekunden bis zum nächsten Versuch } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    CursorExpired:
+      description: Cursor älter als bereinigte Löschinformationen (`SYNC_CURSOR_EXPIRED`) – vollständig neu synchronisieren (cursor=0)
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   schemas:
     ReportStatus: { type: string, enum: [DRAFT, GENERATED, EDITED, FINALIZED] }
     WritingStyle: { type: string, enum: [NEUTRAL, FORMAL, SIMPLE, DETAILED] }
     PageMeta:
       type: object
+      readOnly: true
       properties:
         page: { type: integer }
         limit: { type: integer }
@@ -340,13 +542,15 @@ components:
       properties:
         error:
           type: object
+          required: [code, message, requestId]
           properties:
             code:
               type: string
               enum: [VALIDATION_FAILED, INVALID_REQUEST_BODY, INVALID_PARAMETER, UNAUTHORIZED, INVALID_CREDENTIALS,
                      INVALID_REFRESH_TOKEN, ACCOUNT_DISABLED, ACCOUNT_TEMPORARILY_LOCKED, REGISTRATION_DISABLED,
                      EMAIL_ALREADY_REGISTERED, NOT_FOUND, METHOD_NOT_ALLOWED, CONFLICT, PAYLOAD_TOO_LARGE,
-                     UNSUPPORTED_MEDIA_TYPE, RATE_LIMITED, INTERNAL_ERROR]
+                     UNSUPPORTED_MEDIA_TYPE, RATE_LIMITED, INTERNAL_ERROR, SYNC_CURSOR_EXPIRED, DEVICE_REQUIRED,
+                     OPERATION_ID_REUSED]
             message: { type: string }
             requestId: { type: string }
             details:
@@ -364,24 +568,25 @@ components:
       properties:
         reason: { type: string, enum: [VERSION_MISMATCH, DELETED_ON_SERVER, ALREADY_EXISTS, DUPLICATE_WEEK, ID_UNAVAILABLE] }
         serverVersion: { type: integer, nullable: true }
-        serverRecord: { type: object, nullable: true, description: Aktueller Datensatz auf dem Server }
-    HealthResponse:
+        serverRecord: { type: object, nullable: true, description: Aktueller Datensatz auf dem Server (null bei gelöschten oder fremden Datensätzen) }
+    HealthEnvelope:
       type: object
       properties:
         data:
           type: object
           properties:
-            status: { type: string, enum: [ok, unavailable] }
-            components: { type: object, additionalProperties: { type: string, enum: [up, down] } }
+            status: { type: string, enum: [ok, unavailable, ready, not_ready] }
+            components: { type: object, additionalProperties: { type: string }, example: { api: up, database: up, schema: current } }
     DeviceInfo:
       type: object
-      description: Optional. Stabile, auf dem Gerät einmalig erzeugte UUID für Geräteverwaltung und Sync-Status.
+      description: Angaben zum Gerät. Bewusst keine Hardware-Kennungen, Seriennummern oder Standortdaten.
       required: [id]
       properties:
-        id: { type: string, format: uuid }
-        name: { type: string, maxLength: 100 }
+        id: { type: string, format: uuid, description: Stabile, auf dem Gerät einmalig erzeugte UUID }
+        name: { type: string, maxLength: 100, example: Pixel 9 }
         platform: { type: string, maxLength: 32, default: ANDROID }
-        appVersion: { type: string, maxLength: 32 }
+        osVersion: { type: string, maxLength: 32, example: "15" }
+        appVersion: { type: string, maxLength: 32, example: "2.2.0" }
     RegisterRequest:
       type: object
       required: [email, password]
@@ -399,8 +604,9 @@ components:
         device: { $ref: "#/components/schemas/DeviceInfo" }
     Account:
       type: object
+      readOnly: true
       properties:
-        id: { type: string, format: uuid }
+        id: { type: string, format: uuid, description: Stabile Benutzer-ID }
         email: { type: string }
         timezone: { type: string }
         createdAt: { type: string, format: date-time }
@@ -422,10 +628,33 @@ components:
                 refreshToken: { type: string }
                 refreshTokenExpiresAt: { type: string, format: date-time }
                 sessionId: { type: string, format: uuid }
+    Session:
+      type: object
+      readOnly: true
+      properties:
+        id: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid, nullable: true }
+        deviceName: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time, description: Auf etwa eine Minute genau }
+        expiresAt: { type: string, format: date-time }
+        current: { type: boolean }
+    SecurityEvent:
+      type: object
+      readOnly: true
+      properties:
+        id: { type: integer, format: int64 }
+        type:
+          type: string
+          enum: [REGISTERED, LOGIN_SUCCEEDED, LOGIN_FAILED, ACCOUNT_LOCKED, LOGOUT, LOGOUT_ALL, REFRESH_TOKEN_REUSE,
+                 SESSION_REVOKED, DEVICE_REVOKED, PASSWORD_CHANGED, PASSWORD_CHANGE_FAILED]
+        sessionId: { type: string, format: uuid, nullable: true }
+        deviceId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
     Profile:
       type: object
       properties:
-        id: { type: string, format: uuid, description: Entspricht der Benutzer-ID }
+        id: { type: string, format: uuid, readOnly: true, description: Entspricht der Benutzer-ID }
         name: { type: string }
         profession: { type: string }
         company: { type: string }
@@ -434,16 +663,16 @@ components:
         trainingStart: { type: string, format: date, nullable: true }
         trainingEnd: { type: string, format: date, nullable: true }
         writingStyle: { $ref: "#/components/schemas/WritingStyle" }
-        version: { type: integer }
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
+        version: { type: integer, readOnly: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        updatedAt: { type: string, format: date-time, readOnly: true }
     ProfileEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/Profile" } } }
     ProfileRequest:
       type: object
       required: [version]
       description: Vollständiger Inhalt; nicht gesendete Textfelder werden geleert.
       properties:
-        version: { type: integer, minimum: 1 }
+        version: { type: integer, minimum: 1, description: Basisversion }
         name: { type: string, maxLength: 120 }
         profession: { type: string, maxLength: 120 }
         company: { type: string, maxLength: 160 }
@@ -452,70 +681,95 @@ components:
         trainingStart: { type: string, format: date, nullable: true }
         trainingEnd: { type: string, format: date, nullable: true }
         writingStyle: { $ref: "#/components/schemas/WritingStyle" }
-    DailyReport:
+    Origin:
       type: object
+      description: Herkunft der letzten Änderung (1.1). Nur informativ, nie Grundlage von Entscheidungen.
       properties:
-        id: { type: string, format: uuid }
-        date: { type: string, format: date }
-        text: { type: string }
-        note: { type: string }
-        orderIndex: { type: integer }
-        status: { $ref: "#/components/schemas/ReportStatus" }
-        version: { type: integer }
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
-        deleted: { type: boolean }
-        deletedAt: { type: string, format: date-time, nullable: true }
+        clientUpdatedAt: { type: string, format: date-time, nullable: true, description: Vom Gerät gemeldete Zeit (Clientzeit) }
+        clientLocalId: { type: string, nullable: true, description: Lokale ID auf dem Gerät (z. B. Room-ID) }
+        createdByDeviceId: { type: string, format: uuid, nullable: true, readOnly: true }
+        lastModifiedByDeviceId: { type: string, format: uuid, nullable: true, readOnly: true }
+        lastOperationId: { type: string, format: uuid, nullable: true, readOnly: true }
+    ClientInfo:
+      type: object
+      description: Optionale Clientangaben zu einer Änderung (1.1)
+      properties:
+        clientUpdatedAt: { type: string, format: date-time }
+        clientLocalId: { type: string, maxLength: 64, pattern: "^[A-Za-z0-9._:-]{1,64}$" }
+    DailyReport:
+      allOf:
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            date: { type: string, format: date }
+            text: { type: string }
+            note: { type: string }
+            orderIndex: { type: integer }
+            status: { $ref: "#/components/schemas/ReportStatus" }
+            version: { type: integer, readOnly: true }
+            createdAt: { type: string, format: date-time, readOnly: true, description: Serverzeit }
+            updatedAt: { type: string, format: date-time, readOnly: true, description: Serverzeit }
+            deleted: { type: boolean, readOnly: true }
+            deletedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        - $ref: "#/components/schemas/Origin"
     DailyReportEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/DailyReport" } } }
     DailyReportRequest:
-      type: object
-      required: [date, text]
-      properties:
-        id: { type: string, format: uuid, description: Optional beim Erstellen }
-        version: { type: integer, description: Pflicht bei PUT }
-        date: { type: string, format: date }
-        text: { type: string, maxLength: 5000 }
-        note: { type: string, maxLength: 2000 }
-        orderIndex: { type: integer, minimum: 0, maximum: 10000, default: 0 }
-        status: { $ref: "#/components/schemas/ReportStatus" }
+      allOf:
+        - type: object
+          required: [date, text]
+          properties:
+            id: { type: string, format: uuid, description: Optional beim Erstellen (empfohlen, vom Gerät erzeugt) }
+            version: { type: integer, description: Basisversion – Pflicht bei PUT }
+            date: { type: string, format: date }
+            text: { type: string, minLength: 1, maxLength: 5000 }
+            note: { type: string, maxLength: 2000 }
+            orderIndex: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+            status: { $ref: "#/components/schemas/ReportStatus" }
+        - $ref: "#/components/schemas/ClientInfo"
     WeeklyReport:
-      type: object
-      properties:
-        id: { type: string, format: uuid }
-        weekStart: { type: string, format: date }
-        weekEnd: { type: string, format: date }
-        isoYear: { type: integer }
-        isoWeek: { type: integer }
-        content: { type: string }
-        status: { $ref: "#/components/schemas/ReportStatus" }
-        generatedAt: { type: string, format: date-time, nullable: true }
-        version: { type: integer }
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
-        deleted: { type: boolean }
-        deletedAt: { type: string, format: date-time, nullable: true }
+      allOf:
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            weekStart: { type: string, format: date }
+            weekEnd: { type: string, format: date, readOnly: true }
+            isoYear: { type: integer, readOnly: true }
+            isoWeek: { type: integer, readOnly: true }
+            content: { type: string }
+            status: { $ref: "#/components/schemas/ReportStatus" }
+            generatedAt: { type: string, format: date-time, nullable: true }
+            version: { type: integer, readOnly: true }
+            createdAt: { type: string, format: date-time, readOnly: true }
+            updatedAt: { type: string, format: date-time, readOnly: true }
+            deleted: { type: boolean, readOnly: true }
+            deletedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        - $ref: "#/components/schemas/Origin"
     WeeklyReportEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/WeeklyReport" } } }
     WeeklyReportRequest:
-      type: object
-      required: [weekStart]
-      properties:
-        id: { type: string, format: uuid }
-        version: { type: integer }
-        weekStart: { type: string, format: date, description: Muss ein Montag sein }
-        content: { type: string, maxLength: 50000 }
-        status: { $ref: "#/components/schemas/ReportStatus" }
-        generatedAt: { type: string, format: date-time, nullable: true }
+      allOf:
+        - type: object
+          required: [weekStart]
+          properties:
+            id: { type: string, format: uuid }
+            version: { type: integer, description: Basisversion – Pflicht bei PUT }
+            weekStart: { type: string, format: date, description: Muss ein Montag sein }
+            content: { type: string, maxLength: 50000 }
+            status: { $ref: "#/components/schemas/ReportStatus" }
+            generatedAt: { type: string, format: date-time, nullable: true }
+        - $ref: "#/components/schemas/ClientInfo"
     WeekEnvelope:
       type: object
       properties:
         data:
           type: object
+          readOnly: true
           properties:
             weekStart: { type: string, format: date }
             weekEnd: { type: string, format: date }
             isoYear: { type: integer }
             isoWeek: { type: integer }
             timezone: { type: string }
+            today: { type: string, format: date, description: "Heute in der Zeitzone des Benutzers (1.1)" }
             days:
               type: array
               items:
@@ -527,13 +781,15 @@ components:
             weeklyReport: { allOf: [{ $ref: "#/components/schemas/WeeklyReport" }], nullable: true }
     SyncChange:
       type: object
+      readOnly: true
       properties:
         type: { type: string, enum: [DAILY_REPORT, WEEKLY_REPORT, PROFILE] }
         id: { type: string, format: uuid }
         version: { type: integer }
         changeSeq: { type: integer, format: int64 }
         deleted: { type: boolean }
-        updatedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, description: Serverzeit }
+        echo: { type: boolean, description: "Nur bei POST /sync: eigene Änderung aus derselben Anfrage" }
         data: { type: object, nullable: true, description: Datensatz wie bei REST; null bei Tombstones }
     SyncPullResponse:
       type: object
@@ -542,69 +798,114 @@ components:
         nextCursor: { type: string }
         hasMore: { type: boolean }
         serverTime: { type: string, format: date-time }
+    SyncPushItem:
+      allOf:
+        - type: object
+          required: [type, operation, id]
+          properties:
+            operationId: { type: string, format: uuid, description: "Eindeutig je Änderung, bei Wiederholung identisch (empfohlen, 1.1)" }
+            type: { type: string, enum: [DAILY_REPORT, WEEKLY_REPORT, PROFILE] }
+            operation: { type: string, enum: [UPSERT, DELETE] }
+            id: { type: string, format: uuid, description: "Bei PROFILE: die eigene Benutzer-ID" }
+            baseVersion: { type: integer, nullable: true, description: "null = lokal neu; sonst Version, auf der die Änderung basiert" }
+            data: { type: object, description: Inhalt wie bei REST (bei DELETE nicht nötig) }
+        - $ref: "#/components/schemas/ClientInfo"
     SyncPushRequest:
       type: object
       required: [changes]
       properties:
-        changes:
-          type: array
-          maxItems: 100
-          items:
-            type: object
-            required: [type, operation, id]
-            properties:
-              type: { type: string, enum: [DAILY_REPORT, WEEKLY_REPORT, PROFILE] }
-              operation: { type: string, enum: [UPSERT, DELETE] }
-              id: { type: string, format: uuid, description: "Bei PROFILE: die eigene Benutzer-ID" }
-              baseVersion: { type: integer, nullable: true, description: "null = lokal neu; sonst Version, auf der die Änderung basiert" }
-              data: { type: object, description: Inhalt wie bei REST (bei DELETE nicht nötig) }
-    SyncPushResponse:
+        changes: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/SyncPushItem" } }
+    SyncPushResult:
       type: object
+      readOnly: true
       properties:
-        results:
-          type: array
-          items:
-            type: object
-            properties:
-              index: { type: integer }
-              type: { type: string, nullable: true }
-              id: { type: string, nullable: true }
-              status: { type: string, enum: [APPLIED, CONFLICT, REJECTED] }
-              version: { type: integer, nullable: true }
-              changeSeq: { type: integer, format: int64, nullable: true }
-              record: { type: object, nullable: true }
-              conflict: { $ref: "#/components/schemas/ConflictInfo" }
-              error:
-                type: object
-                nullable: true
-                properties:
-                  code: { type: string }
-                  message: { type: string }
-                  details: { type: array, items: { type: object } }
-        serverTime: { type: string, format: date-time }
-    SyncStatus:
-      type: object
-      properties:
-        serverCursor: { type: string }
-        serverTime: { type: string, format: date-time }
-        device:
+        index: { type: integer }
+        operationId: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        id: { type: string, nullable: true }
+        status: { type: string, enum: [APPLIED, CONFLICT, REJECTED] }
+        version: { type: integer, nullable: true }
+        changeSeq: { type: integer, format: int64, nullable: true }
+        record: { type: object, nullable: true }
+        conflict: { $ref: "#/components/schemas/ConflictInfo" }
+        error:
           type: object
           nullable: true
           properties:
-            deviceId: { type: string, format: uuid }
-            lastPullAt: { type: string, format: date-time, nullable: true }
-            lastPullCursor: { type: string, nullable: true }
-            lastPushAt: { type: string, format: date-time, nullable: true }
+            code: { type: string }
+            message: { type: string }
+            details: { type: array, items: { type: object } }
+        replayed: { type: boolean, description: "Operation wurde bereits früher verarbeitet; es wird nur ihr Ergebnis geliefert (1.1)" }
+    SyncPushResponse:
+      type: object
+      properties:
+        results: { type: array, items: { $ref: "#/components/schemas/SyncPushResult" } }
+        serverTime: { type: string, format: date-time }
+    SyncRequest:
+      type: object
+      properties:
+        cursor: { type: string, default: "0" }
+        limit: { type: integer, minimum: 1, maximum: 500, default: 200 }
+        changes: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/SyncPushItem" } }
+    SyncResponse:
+      type: object
+      properties:
+        push: { $ref: "#/components/schemas/SyncPushResponse" }
+        pull: { $ref: "#/components/schemas/SyncPullResponse" }
+        device: { allOf: [{ $ref: "#/components/schemas/SyncDeviceStatus" }], nullable: true }
+        serverTime: { type: string, format: date-time }
+    SyncCompleteRequest:
+      type: object
+      required: [result]
+      properties:
+        result: { type: string, enum: [SUCCESS, FAILED] }
+        cursor: { type: string, description: Lokal übernommener Cursor – Pflicht bei SUCCESS }
+        unresolvedConflicts: { type: integer, minimum: 0, default: 0 }
+        errorCode: { type: string, pattern: "^[A-Z0-9_]{1,64}$", example: NETWORK_ERROR }
+    SyncDeviceStatus:
+      type: object
+      readOnly: true
+      properties:
+        deviceId: { type: string, format: uuid }
+        syncStatus: { type: string, enum: [NEVER, SUCCESS, FAILED, CONFLICT] }
+        lastSyncAt: { type: string, format: date-time, nullable: true, description: Letzte erfolgreiche Synchronisierung }
+        lastSuccessfulCursor: { type: string, nullable: true }
+        lastSyncStartedAt: { type: string, format: date-time, nullable: true }
+        lastFailedSyncAt: { type: string, format: date-time, nullable: true }
+        lastSyncErrorCode: { type: string, nullable: true }
+        unresolvedConflicts: { type: integer }
+        lastPullAt: { type: string, format: date-time, nullable: true }
+        lastPullCursor: { type: string, nullable: true }
+        lastPushAt: { type: string, format: date-time, nullable: true }
+    SyncStatus:
+      type: object
+      readOnly: true
+      properties:
+        serverCursor: { type: string, description: Höchste Änderungsnummer des Kontos }
+        minValidCursor: { type: string, description: "Cursor älterer Epochen unterhalb dieser Nummer sind abgelaufen (1.1)" }
+        cursorEpoch: { type: integer, description: "Aktuelle Cursor-Epoche; steigt bei Tombstone-Bereinigung und nach reset-sync-cursors (1.1)" }
+        serverTime: { type: string, format: date-time }
+        device: { allOf: [{ $ref: "#/components/schemas/SyncDeviceStatus" }], nullable: true }
     Device:
       type: object
+      readOnly: true
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         platform: { type: string }
+        osVersion: { type: string }
         appVersion: { type: string }
         createdAt: { type: string, format: date-time }
         lastSeenAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        syncStatus: { type: string, enum: [NEVER, SUCCESS, FAILED, CONFLICT] }
+        lastSyncAt: { type: string, format: date-time, nullable: true }
+        lastSyncStartedAt: { type: string, format: date-time, nullable: true }
+        lastFailedSyncAt: { type: string, format: date-time, nullable: true }
+        lastSyncErrorCode: { type: string, nullable: true }
+        unresolvedConflicts: { type: integer }
         lastPullAt: { type: string, format: date-time, nullable: true }
         lastPushAt: { type: string, format: date-time, nullable: true }
         activeSessions: { type: integer }
         current: { type: boolean }
+    DeviceEnvelope: { type: object, properties: { data: { $ref: "#/components/schemas/Device" } } }

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -138,10 +139,12 @@ type SyncDeviceStatus struct {
 }
 
 type SyncStatus struct {
-	// Höchste Änderungsnummer dieses Kontos. Ist sie größer als der lokale Cursor, gibt es Neues.
+	// Höchste Änderungsnummer dieses Kontos. Ist sie größer als die Nummer im lokalen Cursor
+	// (Teil vor dem Punkt), gibt es Neues.
 	ServerCursor string `json:"serverCursor"`
-	// Kleinster noch gültiger Cursor (> 0). Ältere Cursor erfordern eine vollständige Neusynchronisierung.
+	// Cursor älterer Epochen unterhalb dieser Nummer erfordern eine vollständige Neusynchronisierung.
 	MinValidCursor string            `json:"minValidCursor"`
+	CursorEpoch    int64             `json:"cursorEpoch"`
 	ServerTime     string            `json:"serverTime"`
 	Device         *SyncDeviceStatus `json:"device"`
 }
@@ -155,43 +158,64 @@ type Sync struct {
 	Log      *slog.Logger
 }
 
-// ParseCursor prüft einen Cursor-Wert ("0" = alles).
-func ParseCursor(raw *string) (int64, error) {
-	if raw == nil || *raw == "" {
-		return 0, nil
+// Cursor ist ein Synchronisationsstand: Änderungsnummer und Epoche. Für Clients ist er ein
+// undurchsichtiger String: "<Nummer>" (Epoche 0, wie in 1.0) oder "<Nummer>.<Epoche>".
+type Cursor struct {
+	Seq   int64
+	Epoch int64
+}
+
+func (c Cursor) String() string {
+	if c.Epoch == 0 {
+		return itoa(c.Seq)
 	}
-	c, err := strconv.ParseInt(*raw, 10, 64)
-	if err != nil || c < 0 {
-		return 0, apperr.BadParameter("cursor", "invalid_cursor")
+	return itoa(c.Seq) + "." + itoa(c.Epoch)
+}
+
+// ParseCursor prüft einen Cursor-Wert ("0" bzw. leer = alles).
+func ParseCursor(raw *string) (Cursor, error) {
+	if raw == nil || *raw == "" {
+		return Cursor{}, nil
+	}
+	seqPart, epochPart, hasEpoch := strings.Cut(*raw, ".")
+	seq, err := strconv.ParseInt(seqPart, 10, 64)
+	if err != nil || seq < 0 {
+		return Cursor{}, apperr.BadParameter("cursor", "invalid_cursor")
+	}
+	c := Cursor{Seq: seq}
+	if hasEpoch {
+		if c.Epoch, err = strconv.ParseInt(epochPart, 10, 64); err != nil || c.Epoch < 1 {
+			return Cursor{}, apperr.BadParameter("cursor", "invalid_cursor")
+		}
 	}
 	return c, nil
 }
 
-// checkCursor erkennt Cursor, die älter als bereits bereinigte Tombstones sind.
-func (s *Sync) checkCursor(ctx context.Context, cursor int64) error {
-	if cursor == 0 {
-		return nil
-	}
-	min, err := store.MinValidCursor(ctx, s.DB.Pool)
+// checkCursor erkennt Cursor, die Löschungen verpasst haben könnten (Tombstones bereits bereinigt
+// oder Datenbank aus einem Backup wiederhergestellt). Liefert den aktuellen Cursor-Zustand.
+func (s *Sync) checkCursor(ctx context.Context, c Cursor) (store.CursorState, error) {
+	state, err := store.LoadCursorState(ctx, s.DB.Pool)
 	if err != nil {
-		return err
+		return state, err
 	}
-	if cursor < min {
-		return apperr.New(http.StatusGone, apperr.CodeSyncCursorExpired,
-			"Der Synchronisationsstand ist zu alt. Bitte vollständig neu synchronisieren (cursor=0).")
+	switch {
+	case c.Seq == 0, c.Epoch == state.Epoch, c.Seq >= state.MinValid && c.Epoch < state.Epoch:
+		return state, nil
 	}
-	return nil
+	return state, apperr.New(http.StatusGone, apperr.CodeSyncCursorExpired,
+		"Der Synchronisationsstand ist zu alt. Bitte vollständig neu synchronisieren (cursor=0).")
 }
 
 // Pull liefert alle Änderungen eines Kontos nach dem Cursor, inklusive Tombstones.
-func (s *Sync) Pull(ctx context.Context, p Principal, cursor int64, limit int) (*SyncPullResponse, error) {
-	if err := s.checkCursor(ctx, cursor); err != nil {
+func (s *Sync) Pull(ctx context.Context, p Principal, cursor Cursor, limit int) (*SyncPullResponse, error) {
+	state, err := s.checkCursor(ctx, cursor)
+	if err != nil {
 		return nil, err
 	}
-	return s.pull(ctx, p, cursor, limit, nil)
+	return s.pull(ctx, p, cursor.Seq, state.Epoch, limit, nil)
 }
 
-func (s *Sync) pull(ctx context.Context, p Principal, cursor int64, limit int, echo map[string]int) (*SyncPullResponse, error) {
+func (s *Sync) pull(ctx context.Context, p Principal, cursor, epoch int64, limit int, echo map[string]int) (*SyncPullResponse, error) {
 	var changes []SyncChange
 	hasMore := false
 	next := cursor
@@ -249,7 +273,7 @@ func (s *Sync) pull(ctx context.Context, p Principal, cursor int64, limit int, e
 	if changes == nil {
 		changes = []SyncChange{}
 	}
-	return &SyncPullResponse{Changes: changes, NextCursor: itoa(next), HasMore: hasMore,
+	return &SyncPullResponse{Changes: changes, NextCursor: Cursor{Seq: next, Epoch: epoch}.String(), HasMore: hasMore,
 		ServerTime: model.FormatTime(s.Now())}, nil
 }
 
@@ -304,7 +328,8 @@ func (s *Sync) Sync(ctx context.Context, p Principal, req SyncRequest) (*SyncRes
 		}
 		limit = *req.Limit
 	}
-	if err := s.checkCursor(ctx, cursor); err != nil {
+	state, err := s.checkCursor(ctx, cursor)
+	if err != nil {
 		return nil, err
 	}
 	if p.DeviceRef != nil {
@@ -322,7 +347,7 @@ func (s *Sync) Sync(ctx context.Context, p Principal, req SyncRequest) (*SyncRes
 			echo[*r.ID] = *r.Version
 		}
 	}
-	pulled, err := s.pull(ctx, p, cursor, limit, echo)
+	pulled, err := s.pull(ctx, p, cursor.Seq, state.Epoch, limit, echo)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +379,7 @@ func (s *Sync) Complete(ctx context.Context, p Principal, req SyncCompleteReques
 		} else if c, err := ParseCursor(req.Cursor); err != nil {
 			v.Add("cursor", "invalid_cursor")
 		} else {
-			cursor = &c
+			cursor = &c.Seq
 		}
 	}
 	if req.ErrorCode != nil && !syncErrorPattern.MatchString(*req.ErrorCode) {
@@ -390,11 +415,12 @@ func (s *Sync) Status(ctx context.Context, p Principal) (*SyncStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	min, err := store.MinValidCursor(ctx, s.DB.Pool)
+	state, err := store.LoadCursorState(ctx, s.DB.Pool)
 	if err != nil {
 		return nil, err
 	}
-	out := &SyncStatus{ServerCursor: itoa(cursor), MinValidCursor: itoa(min), ServerTime: model.FormatTime(s.Now())}
+	out := &SyncStatus{ServerCursor: itoa(cursor), MinValidCursor: itoa(state.MinValid), CursorEpoch: state.Epoch,
+		ServerTime: model.FormatTime(s.Now())}
 	if p.DeviceRef != nil {
 		if out.Device, err = s.deviceStatus(ctx, p); err != nil {
 			return nil, err

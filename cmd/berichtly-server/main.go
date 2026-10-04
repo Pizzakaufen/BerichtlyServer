@@ -32,6 +32,9 @@ Befehle:
   db-check       Datenbankverbindung und Schema-Version prüfen (Exit-Code 0 = in Ordnung).
   maintenance    Wartung jetzt ausführen: abgelaufene Tombstones, Sync-Operationen,
                  Sicherheitsereignisse und Sitzungen gemäß Aufbewahrungsfristen entfernen.
+  reset-sync-cursors
+                 Nach dem Einspielen eines Backups: alle Sync-Cursor ungültig machen, damit
+                 jedes Gerät einmal vollständig neu synchronisiert.
   check-config   Konfiguration prüfen (ohne Secrets auszugeben) und beenden.
   healthcheck    Readiness des laufenden Servers abfragen (Exit-Code 0 = bereit).
   seed-dev       Entwicklungskonto mit Beispieldaten anlegen (nur APP_ENV=development).
@@ -104,6 +107,18 @@ func main() {
   Refresh Tokens entfernt:      %d
 `,
 			res.TombstonesPurged, res.MinValidCursor, res.OperationsPurged, res.SecurityEventsPurged, res.SessionsPurged, res.RefreshTokensPurged)
+	case "reset-sync-cursors":
+		cfg := loadConfig(envFile)
+		a := newApp(cfg)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		err := a.DB.InvalidateSyncCursors(ctx)
+		cancel()
+		a.DB.Close()
+		if err != nil {
+			fail(1, "Zurücksetzen fehlgeschlagen: "+err.Error())
+		}
+		a.Log.Warn("Alle Sync-Cursor wurden ungültig gemacht – Geräte synchronisieren beim nächsten Mal vollständig neu")
+		fmt.Println("Sync-Cursor zurückgesetzt. Alle Geräte erhalten beim nächsten Abruf SYNC_CURSOR_EXPIRED und synchronisieren vollständig neu.")
 	case "seed-dev":
 		cfg := loadConfig(envFile)
 		a := newApp(cfg)

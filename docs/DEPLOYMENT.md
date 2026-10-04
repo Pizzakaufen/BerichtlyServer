@@ -49,8 +49,8 @@ Prüfsumme kontrollieren und installieren:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar xzf berichtly-server-1.0.0-alpha-linux-amd64.tar.gz
-cd berichtly-server-1.0.0-alpha-linux-amd64
+tar xzf berichtly-server-1.1.0-linux-amd64.tar.gz
+cd berichtly-server-1.1.0-linux-amd64
 sudo ./deploy/install.sh
 ```
 
@@ -71,13 +71,15 @@ Optional `INTERNAL_STATUS_TOKEN` (`openssl rand -hex 32`) und `REGISTRATION_ENAB
 ```bash
 CONF=/etc/berichtly-server/berichtly-server.env
 sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF check-config
+sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF db-check     # Verbindung + Schema
 sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrate
+sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrate-status
 ```
 
 ### 5. Starten, prüfen, stoppen
 
 ```bash
-sudo systemctl enable --now berichtly-server
+sudo systemctl enable --now berichtly-server        # "enable" = automatischer Start nach jedem Neustart
 systemctl status berichtly-server
 journalctl -u berichtly-server -f                     # JSON-Logs
 sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF healthcheck
@@ -102,7 +104,8 @@ Alternativ Caddy mit automatischem HTTPS: `deploy/caddy/Caddyfile`.
 ### Update
 
 Neues Release-Archiv entpacken und `sudo ./deploy/install.sh` ausführen. Läuft der Dienst bereits, führt das
-Skript die Migrationen aus und startet ihn neu.
+Skript die Migrationen aus und startet ihn neu. Vorher ein Backup erstellen (docs/BACKUP.md). Upgrade von
+1.0 Alpha: docs/UPGRADE.md.
 
 ## Variante B: Docker Compose
 
@@ -116,21 +119,26 @@ docker compose ps
 - Der Server ist nur unter `127.0.0.1:8080` veröffentlicht; Nginx/Caddy auf dem Host leitet dorthin weiter.
 - PostgreSQL hängt nur im internen Netz `backend` (ohne Internetzugang, ohne veröffentlichte Ports).
 - Der Server-Container läuft als `nonroot`, mit schreibgeschütztem Dateisystem und ohne Linux-Capabilities.
-- Daten liegen im Volume `berichtly_db-data`.
+- Daten liegen im Volume `berichtly_db-data`. Container starten bei Fehlern automatisch neu (`restart: unless-stopped`);
+  PostgreSQL wird beim Stoppen sauber heruntergefahren (`stop_grace_period: 60s`), Logs sind größenbegrenzt.
 
-## Backups (manuell, 1.0 Alpha)
+## Wartung
 
-```bash
-sudo -u postgres pg_dump -Fc berichtly > berichtly-$(date +%F).dump                      # systemd
-docker compose exec -T db pg_dump -U berichtly -Fc berichtly > berichtly-$(date +%F).dump # Docker
-pg_restore -d berichtly --clean berichtly-JJJJ-MM-TT.dump                                # Wiederherstellen
-```
+Der Server entfernt einmal täglich (`MAINTENANCE_INTERVAL_HOURS`) Daten, deren Aufbewahrungsfrist abgelaufen ist:
+alte Tombstones (365 Tage), Idempotenz-Einträge (30 Tage), Sicherheitsereignisse (180 Tage) und abgelaufene oder
+widerrufene Sitzungen (30 Tage). Bei mehreren Instanzen läuft die Wartung dank Datenbanksperre nur einmal.
+Alternativ `MAINTENANCE_INTERVAL_HOURS=0` und per Cron `berichtly-server maintenance`.
 
-Backups enthalten personenbezogene Daten – verschlüsselt und getrennt vom Server aufbewahren.
+## Backups
+
+Siehe docs/BACKUP.md (pg_dump, Ablage außerhalb des Servers, Wiederherstellung mit `reset-sync-cursors`).
 
 ## Monitoring
 
 - `GET /api/v1/health` → `200` (gesund) bzw. `503` (Datenbank nicht erreichbar) – für Uptime-Monitore.
+- `GET /api/v1/health/live` → Prozess antwortet (Liveness, ohne Datenbank).
+- `GET /api/v1/health/ready` → Datenbank erreichbar **und** Schema aktuell (Readiness; vom Docker-Healthcheck
+  und `berichtly-server healthcheck` verwendet).
 - `GET /internal/status` mit `Authorization: Bearer $INTERNAL_STATUS_TOKEN` → Datenbanklatenz, Schema-Version,
   Pool-Auslastung, Speicher, freier Plattenplatz, Request- und Fehlerzähler. Nur intern abfragen:
   `curl -H "Authorization: Bearer …" http://127.0.0.1:8080/internal/status`

@@ -46,6 +46,10 @@ install -d -m 0755 -o root -g root "$APP_DIR"
 install -m 0755 -o root -g root "$BINARY" "$APP_DIR/berichtly-server.new"
 mv "$APP_DIR/berichtly-server.new" "$APP_DIR/berichtly-server"
 install -m 0644 -o root -g root README.md "$APP_DIR/README.md"
+if [ -d docs ]; then
+    install -d -m 0755 -o root -g root "$APP_DIR/docs"
+    install -m 0644 -o root -g root docs/*.md "$APP_DIR/docs/"
+fi
 
 # Konfiguration mit Secrets: nur root und der Dienstbenutzer dürfen sie lesen.
 install -d -m 0750 -o root -g berichtly "$CONF_DIR"
@@ -78,7 +82,8 @@ Nächste Schritte:
   1. Konfiguration bearbeiten:  sudo nano $CONF_FILE
        (mindestens DB_PASSWORD und JWT_SECRET – erzeugen mit: openssl rand -base64 48)
   2. Prüfen:                    sudo -u berichtly $APP_DIR/berichtly-server --env-file $CONF_FILE check-config
-  3. Migrationen:               sudo -u berichtly $APP_DIR/berichtly-server --env-file $CONF_FILE migrate
+  3. Datenbank prüfen:         sudo -u berichtly $APP_DIR/berichtly-server --env-file $CONF_FILE db-check
+     Migrationen:               sudo -u berichtly $APP_DIR/berichtly-server --env-file $CONF_FILE migrate
   4. Dienst starten:            sudo systemctl enable --now $SERVICE
   5. Status:                    systemctl status $SERVICE ; journalctl -u $SERVICE -f
 EOT

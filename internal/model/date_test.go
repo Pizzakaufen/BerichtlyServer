@@ -35,3 +35,33 @@ func TestDatumParsen(t *testing.T) {
 		t.Fatal("Datum außerhalb des Bereichs akzeptiert")
 	}
 }
+
+func TestIsoWocheAusJahrUndNummer(t *testing.T) {
+	cases := []struct {
+		year, week int
+		start      string
+		ok         bool
+	}{
+		{2026, 1, "2025-12-29", true},
+		{2026, 53, "2026-12-28", true}, // 2026 beginnt an einem Donnerstag → 53 Wochen
+		{2025, 53, "", false},
+		{2020, 53, "2020-12-28", true},
+		{2021, 1, "2021-01-04", true},
+		{2026, 0, "", false},
+		{1999, 10, "", false},
+	}
+	for _, c := range cases {
+		w, ok := IsoWeekOf(c.year, c.week)
+		if ok != c.ok || (ok && w.Start.String() != c.start) {
+			t.Fatalf("%d/%d: %v %v", c.year, c.week, w.Start, ok)
+		}
+	}
+	first, last := MonthRange(2024, 2)
+	if first.String() != "2024-02-01" || last.String() != "2024-02-29" {
+		t.Fatal(first, last)
+	}
+	_, last = MonthRange(2026, 12)
+	if last.String() != "2026-12-31" {
+		t.Fatal(last)
+	}
+}

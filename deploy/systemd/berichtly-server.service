@@ -1,10 +1,14 @@
 # systemd-Unit für Berichtly Server.
-# Installation: deploy/install.sh (siehe docs/DEPLOYMENT.md)
+# Berichtly Server 1.1 – Installation: deploy/install.sh (siehe docs/DEPLOYMENT.md).
+# Secrets stehen ausschließlich in der EnvironmentFile (Rechte 0640 root:berichtly), nie in dieser Datei.
 [Unit]
 Description=Berichtly Server (Backend für die Berichtly-Android-App)
 Documentation=file:///opt/berichtly-server/README.md
 After=network-online.target postgresql.service
 Wants=network-online.target
+# Wiederholte Abstürze nicht endlos neu starten (5 Versuche in 5 Minuten).
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -18,6 +22,7 @@ ExecStart=/opt/berichtly-server/berichtly-server serve
 # danach wird der Datenbank-Pool geschlossen (SHUTDOWN_TIMEOUT_SECONDS, Standard 15 s).
 KillSignal=SIGTERM
 TimeoutStopSec=30
+TimeoutStartSec=120
 Restart=on-failure
 RestartSec=5
 

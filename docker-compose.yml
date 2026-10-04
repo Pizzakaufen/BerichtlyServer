@@ -1,8 +1,8 @@
-# Berichtly Server + PostgreSQL (lokale Entwicklung oder einfacher Einzelserver-Betrieb).
+# Berichtly Server 1.1 + PostgreSQL (lokale Entwicklung oder Einzelserver-Betrieb).
 #
 #   cp .env.example .env    # DB_PASSWORD und JWT_SECRET setzen
 #   docker compose up -d --build
-#   docker compose ps       # Status inkl. Health-Check
+#   docker compose ps       # Status inkl. Health-Checks
 #   docker compose logs -f server
 #   docker compose down     # stoppen (Daten bleiben im Volume)
 #
@@ -10,8 +10,13 @@
 # - PostgreSQL hat KEINE veröffentlichten Ports und hängt nur im internen Netz "backend".
 # - Der Server ist nur auf 127.0.0.1 veröffentlicht; HTTPS übernimmt ein Reverse Proxy.
 # - Keine Passwörter in dieser Datei; alles kommt aus .env.
+# - Datenbankdaten liegen im benannten Volume "db-data" und überstehen Neustarts und Updates.
 
 name: berichtly
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }  # Logs begrenzen, damit die Platte nicht vollläuft
 
 services:
   db:
@@ -29,10 +34,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    stop_grace_period: 60s   # PostgreSQL sauber herunterfahren lassen
+    logging: *logging
 
   server:
-    build: .
-    image: berichtly-server:1.0.0-alpha
+    build:
+      context: .
+      args: { VERSION: "1.1.0" }
+    image: berichtly-server:1.1.0
     restart: unless-stopped
     env_file: .env
     environment:
@@ -47,10 +56,17 @@ services:
     ports:
       - "127.0.0.1:${SERVER_PUBLISHED_PORT:-8080}:8080"
     networks: [backend, frontend]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/berichtly-server", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     read_only: true
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     stop_grace_period: 30s
+    logging: *logging
 
 networks:
   backend:

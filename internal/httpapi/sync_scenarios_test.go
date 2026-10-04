@@ -369,4 +369,40 @@ func TestSyncAbgelaufenerCursorNachTombstoneBereinigung(t *testing.T) {
 	}
 	// Aktuelle Geräte sind nicht betroffen.
 	e.get("/api/v1/sync/changes?cursor="+a.cursor, a.s.access).expect(200)
+
+	// Neusynchronisierung über mehrere Seiten (limit=1): Die Zwischen-Cursor liegen numerisch unter der
+	// Untergrenze, sind aber neu ausgestellt und müssen gültig sein – sonst entstünde eine Endlosschleife.
+	old.cursor, old.local = "0", map[string]*localReport{}
+	pages := 0
+	for {
+		p := e.get("/api/v1/sync/changes?limit=1&cursor="+old.cursor, old.s.access).expect(200)
+		old.apply(p, "")
+		pages++
+		if p.at("data", "hasMore") != true || pages > 20 {
+			break
+		}
+	}
+	if act := old.active(); len(act) != 1 || act[keep] != "Bleibt" || pages < 2 {
+		t.Fatalf("Neusynchronisierung unvollständig: %v nach %d Seiten", act, pages)
+	}
+	e.get("/api/v1/sync/changes?cursor="+old.cursor, old.s.access).expect(200)
+}
+
+// Nach dem Einspielen eines Backups springen die Änderungsnummern zurück. `reset-sync-cursors`
+// erklärt alle bisherigen Cursor für ungültig, damit kein Gerät neue Änderungen übersieht.
+func TestSyncCursorZuruecksetzenNachWiederherstellung(t *testing.T) {
+	e := newEnv(t)
+	d := e.newDevice("restore@example.org", true)
+	d.sync(op(uuid.NewString(), uuid.NewString(), nil, "UPSERT", "vorher"))
+	before := d.cursor
+	if err := e.app.DB.InvalidateSyncCursors(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.get("/api/v1/sync/changes?cursor="+before, d.s.access).expect(410)
+	d.cursor, d.local = "0", map[string]*localReport{}
+	d.sync(op(uuid.NewString(), uuid.NewString(), nil, "UPSERT", "nachher"))
+	if len(d.active()) != 2 {
+		t.Fatal(d.active())
+	}
+	e.get("/api/v1/sync/changes?cursor="+d.cursor, d.s.access).expect(200)
 }

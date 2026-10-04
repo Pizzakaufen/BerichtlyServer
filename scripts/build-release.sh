@@ -2,7 +2,7 @@
 # Baut die Linux-Release-Archive von Berichtly Server.
 #
 #   ./scripts/build-release.sh            # Version aus VERSION-Datei
-#   VERSION=1.0.0-alpha ./scripts/build-release.sh
+#   VERSION=1.1.0 ./scripts/build-release.sh
 #
 # Ergebnis (in dist/):
 #   berichtly-server-<version>-linux-amd64.tar.gz

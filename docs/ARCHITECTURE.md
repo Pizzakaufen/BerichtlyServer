@@ -1,4 +1,4 @@
-# Architektur – Berichtly Server 1.0 Alpha
+# Architektur – Berichtly Server 1.1
 
 ## Schichten
 
@@ -18,14 +18,16 @@ HTTP (net/http, Go-Standardbibliothek)
 ## Projektstruktur
 
 ```
-cmd/berichtly-server/      Kommandozeile (serve, migrate, check-config, healthcheck, seed-dev, version)
+cmd/berichtly-server/      Kommandozeile (serve, migrate, migrate-status, db-check, check-config, healthcheck,
+                           maintenance, reset-sync-cursors, seed-dev, version)
 api/                       OpenAPI-Spezifikation (in die Binärdatei eingebettet)
 internal/
-  app/                     Verdrahtung, Logger, Entwicklungs-Seed
+  app/                     Verdrahtung, Logger, automatische Wartung, Entwicklungs-Seed
   config/                  Konfiguration aus Umgebungsvariablen und .env-Dateien
-  httpapi/                 Router, Middleware, Handler, Health/Status, API-Doku, Integrationstests
+  httpapi/                 routesV1 (alle /api/v1-Routen), Middleware, Handler, Health/Status, API-Doku,
+                           Integrations-, Szenario-, Upgrade- und Leistungstests
   service/                 Auth, Konto, Profil, Berichte, Wochen, Synchronisierung, Geräte
-  store/                   Datenbankzugriff, Migrationen (migrations/*.sql)
+  store/                   Datenbankzugriff, Migrationen (migrations/*.sql), Wartung, Idempotenz-Speicher
   model/                   Domänentypen (Datum, ISO-Woche, Berichte, Profil …) und JSON-Darstellung
   security/                Argon2id, JWT, Refresh Tokens
   validate/                Feldgenaue Eingabevalidierung
@@ -45,6 +47,9 @@ scripts/build-release.sh   Linux-Release-Archive (amd64/arm64)
 | `refresh_tokens` | Refresh Tokens | nur SHA-256-Hash, einmal verwendbar, Ablaufzeit |
 | `daily_reports` | Tagesberichte | UUID, Datum, Text, Notiz, Reihenfolge, Status, `version`, `change_seq`, `deleted_at` |
 | `weekly_reports` | Wochenberichte | Wochenstart = Montag (DB-Check), max. ein aktiver Bericht je Woche (partieller Unique-Index) |
+| `sync_operations` | Verarbeitete Sync-Operationen | Idempotenz: Ergebnis je `operationId` (ohne Inhalte), Aufbewahrung 30 Tage |
+| `security_events` | Sicherheitsereignisse | Typ, Zeit, technische IDs – keine Inhalte, E-Mails oder IPs |
+| `server_state` | Serverzustand | Cursor-Epoche und Untergrenze gültiger Sync-Cursor |
 | `schema_migrations` | Migrationsstand | Version, Name, Prüfsumme |
 
 Alle persönlichen Daten hängen per Fremdschlüssel (`ON DELETE CASCADE`) an genau einem Konto.
@@ -67,7 +72,7 @@ des Kontos berechnet (Standard `Europe/Berlin`). Die Zeitzonendaten sind in die 
 - **Geräte und Sitzungen** sind getrennt modelliert – Push-Tokens oder "alle Geräte abmelden" lassen sich ohne
   Umbau ergänzen.
 - **Monitoring**: Request- und Fehlerzähler stehen im internen Status; ein Prometheus-Endpunkt kann darauf aufbauen.
-- **Mehrere Instanzen**: Rate Limiting ist in 1.0 Alpha prozesslokal. Für mehrere Instanzen wäre ein gemeinsamer
+- **Mehrere Instanzen**: Rate Limiting ist prozesslokal. Für mehrere Instanzen wäre ein gemeinsamer
   Speicher nötig – für einen einzelnen VPS nicht erforderlich.
 
 ## Ressourcenverbrauch
