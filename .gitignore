@@ -4,12 +4,21 @@
 !.env.example
 *.pem
 *.key
+*.crt
+*.csr
 *.p12
+*.pfx
 secrets/
 
-# Build-Artefakte
-bin/
+# Zertifikate und ACME-Daten (Let's Encrypt liegt auf dem Server unter /etc/letsencrypt, nie im Repository)
+letsencrypt/
+deploy/certbot/www/*
+!deploy/certbot/www/.gitkeep
+
+# Abhängigkeiten und Build-Artefakte
+node_modules/
 dist/
+*.tsbuildinfo
 
 # Lokale Datenbanken / Daten
 *.db

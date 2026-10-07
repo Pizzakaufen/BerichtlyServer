@@ -1,14 +1,27 @@
-# Berichtly Server 1.1
+# Berichtly Server 1.2
 
 Berichtly Server ist das eigenständige **Linux-Backend** für die Berichtly-Android-App. Er verwaltet
 Benutzerkonten, Geräte, Profile, Tages- und Wochenberichte und stellt eine versionierte REST-API sowie ein
 vollständiges Synchronisationsprotokoll für mehrere Android-Geräte pro Konto bereit.
 
-> **Status: 1.1.** Stabile Weiterentwicklung von 1.0 Alpha: Geräte- und Sitzungsverwaltung, idempotente
-> Synchronisierung mit Konflikterkennung, Synchronisationsstatus pro Gerät, Aufbewahrungsstrategie für
-> Löschungen, Sicherheitsereignisse. Bestehende 1.0-Installationen lassen sich ohne Datenverlust aktualisieren
+> **Status: 1.2.** Der Server läuft jetzt auf **Node.js LTS** hinter **Nginx** als einzigem öffentlichen Zugang
+> (HTTPS, TLS 1.2/1.3, HSTS, Rate Limiting). API, Datenbank und Verhalten sind identisch mit 1.1 – bestehende
+> Installationen werden ohne Datenverlust aktualisiert, angemeldete Apps bleiben angemeldet
 > ([docs/UPGRADE.md](docs/UPGRADE.md)). Die Android-App (Berichtly 2.2) funktioniert weiterhin ohne Server; ein
 > API-Client in der App ist der nächste Schritt.
+
+## Aufbau
+
+```
+Android-App ──HTTPS──▶ Nginx (einziger öffentlicher Dienst, Port 443/80)
+                         │  TLS 1.2/1.3 · HSTS · HTTP→HTTPS · Body-Limit 1 MiB · Grund-Rate-Limit
+                         │  /api/* → Node.js · /internal/* und alles andere → 404
+                         ▼
+                       Node.js 24 LTS (nur 127.0.0.1:3000 bzw. internes Docker-Netz)
+                         │  Fastify · Auth · Validierung · Sync · feines Rate Limiting
+                         ▼
+                       PostgreSQL (nur localhost bzw. internes Docker-Netz, nie öffentlich)
+```
 
 ## Funktionen
 
@@ -22,75 +35,90 @@ vollständiges Synchronisationsprotokoll für mehrere Android-Geräte pro Konto 
 | Berichte | Tages- und Wochenberichte mit stabilen IDs, Versionen, Server- und Clientzeit, Herkunft (Gerät, lokale ID, Operation); Filter nach Datum, Zeitraum, Monat, Jahr, ISO-Woche, Status; Pagination |
 | Wochen | Montag–Sonntag, "aktuelle Woche" in der Zeitzone des Benutzers (Sommer-/Winterzeit, Jahreswechsel getestet), Abruf per Datum oder ISO-Woche |
 | Synchronisierung | Push + Pull in einem Schritt, Cursor-Pagination, idempotente Operationen (`operationId`), Konflikterkennung ohne Last-Write-Wins, Tombstones, Abschlussmeldung und Status pro Gerät |
-| Sicherheit | Strikte Datentrennung pro Benutzer, Rate Limiting je Endpunkt und pro Konto, Sicherheitsereignisse ohne Inhalte, CORS nur explizit, Security-Header |
-| Betrieb | Health/Liveness/Readiness, interner Status, strukturierte JSON-Logs mit Request-ID, automatische Wartung, kontrollierter Shutdown |
-| Auslieferung | Statische Linux-Binärdatei (amd64/arm64), systemd-Service, Docker-Image (distroless, nonroot), Docker Compose |
+| Sicherheit | Strikte Datentrennung pro Benutzer, Rate Limiting in Nginx und Node.js, Sicherheitsereignisse ohne Inhalte, CORS nur explizit, Security-Header, HTTPS über Nginx |
+| Betrieb | Health/Liveness/Readiness, interner Status, strukturierte JSON-Logs mit durchgehender Request-ID (Nginx → Node.js), automatische Wartung, kontrollierter Shutdown |
+| Auslieferung | systemd-Dienst (Node.js) + Nginx, oder Docker Compose mit drei Diensten (nginx, server, db) |
 
-Der Server benötigt **keine KI** (die KI bleibt in der App) und **keine Cloud-Dienste** (kein Google, kein Firebase).
+Der Server benötigt **keine KI** (die KI bleibt in der App) und **keine Cloud-Dienste** (kein Google, kein Firebase,
+kein Redis). Einzige Datenbank ist PostgreSQL.
 
 ## Technik
 
-- **Go** (Standardbibliothek für HTTP, Routing, Logging) – eine statisch gelinkte Linux-Binärdatei ohne
-  Laufzeitumgebung; gemessener Speicherbedarf im Betrieb ca. 50 MB (davon rund 20 MB Heap).
-- **PostgreSQL 14+** (getestet mit 17) über `pgx` mit Connection-Pool; versionierte, eingebettete Migrationen.
-- Argon2id (`golang.org/x/crypto`), JWT (`golang-jwt`), `log/slog`.
-- Integrationstests gegen echte PostgreSQL, inklusive Upgrade-Test 1.0 → 1.1 und Leistungstest mit 300 000 Berichten.
+- **Node.js 24 LTS** führt den TypeScript-Quellcode direkt aus (Type Stripping) – kein Build-Schritt.
+  Argon2id kommt aus `node:crypto` (keine nativen Module).
+- **Fastify 5** (HTTP), **node-postgres** (`pg`, Connection-Pool, ausschließlich parametrisierte Abfragen).
+  Das sind die einzigen Laufzeitabhängigkeiten.
+- **PostgreSQL 14+** (getestet mit 17); versionierte Migrationen mit Prüfsummen – dieselben wie in 1.1.
+- **Nginx** (getestet mit 1.30) als Reverse Proxy und TLS-Endpunkt; Let's Encrypt über Certbot.
+- Tests mit `node:test` gegen echte PostgreSQL und echtes Nginx (HTTP und HTTPS).
 
 Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-## Installation auf einem Linux-Server (Release-Archiv)
+## Schnellstart: Linux-Server (systemd)
 
-Voraussetzungen: Linux (x86_64 oder arm64) mit systemd, PostgreSQL 14+. Keine weitere Laufzeitumgebung nötig.
+Voraussetzungen: Debian 12 / Ubuntu 24.04 o. ä. mit systemd, Node.js 24 LTS, PostgreSQL, Nginx, eine Domain mit
+DNS-Eintrag auf den Server. Ausführlich: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), HTTPS: [docs/HTTPS.md](docs/HTTPS.md).
 
 ```bash
-tar xzf berichtly-server-1.1.0-linux-amd64.tar.gz
-cd berichtly-server-1.1.0-linux-amd64
+tar xzf berichtly-server-1.2.0.tar.gz && cd berichtly-server-1.2.0
 
-# PostgreSQL einrichten (Debian/Ubuntu)
-sudo apt install -y postgresql
+# PostgreSQL (nur localhost)
 sudo -u postgres psql -c "CREATE ROLE berichtly LOGIN PASSWORD 'HIER-EIN-STARKES-PASSWORT';"
 sudo -u postgres psql -c "CREATE DATABASE berichtly OWNER berichtly ENCODING 'UTF8';"
 
-# Installieren: Systembenutzer, /opt/berichtly-server, Konfiguration, systemd-Unit
+# Node.js-Server: Systembenutzer, /opt/berichtly-server, Konfiguration, systemd-Unit
 sudo ./deploy/install.sh
+sudo nano /etc/berichtly-server/berichtly-server.env      # DB_PASSWORD, JWT_SECRET (openssl rand -base64 48)
+sudo -u berichtly berichtly-server --env-file /etc/berichtly-server/berichtly-server.env check-config
+sudo systemctl enable --now berichtly-server
+curl http://127.0.0.1:3000/api/v1/health/ready
 
-# Konfigurieren: mindestens DB_PASSWORD und JWT_SECRET (openssl rand -base64 48)
-sudo nano /etc/berichtly-server/berichtly-server.env
-
-CONF=/etc/berichtly-server/berichtly-server.env
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF check-config
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF db-check   # meldet "Schema nicht aktuell" vor migrate
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrate
-sudo systemctl enable --now berichtly-server        # startet auch automatisch nach einem Neustart
-curl http://127.0.0.1:8080/api/v1/health/ready
+# Nginx + HTTPS (Domain nur hier angeben)
+sudo ./deploy/install-nginx.sh berichtly.example.de http          # Ersteinrichtung für Let's Encrypt
+sudo certbot certonly --webroot -w /var/www/certbot -d berichtly.example.de \
+     --deploy-hook "systemctl reload nginx"
+sudo ./deploy/install-nginx.sh berichtly.example.de https         # Produktionsbetrieb
+curl https://berichtly.example.de/api/v1/health
 ```
 
-Verwalten: `sudo systemctl stop|start|restart berichtly-server`, Logs: `journalctl -u berichtly-server -f`.
-HTTPS über Reverse Proxy (Vorlagen für Nginx und Caddy in `deploy/`). Ausführlich: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-Update von 1.0 Alpha: [docs/UPGRADE.md](docs/UPGRADE.md). Backup: [docs/BACKUP.md](docs/BACKUP.md).
-
-## Betrieb mit Docker Compose
+Dienste verwalten:
 
 ```bash
-cp .env.example .env          # DB_PASSWORD und JWT_SECRET setzen
-docker compose up -d --build
-docker compose ps             # beide Dienste "healthy"?
-curl http://127.0.0.1:8080/api/v1/health/ready
+sudo systemctl status|start|stop|restart berichtly-server     # Node.js-Server
+sudo systemctl status|reload|restart nginx                     # nach Konfigurationsänderungen: reload
+sudo systemctl status|restart postgresql
+journalctl -u berichtly-server -f                              # Server-Logs (JSON)
 ```
 
-PostgreSQL hat keine veröffentlichten Ports und hängt nur im internen Netz; der Server ist nur auf `127.0.0.1`
-erreichbar. Das Server-Image enthält nur die Binärdatei (distroless, ohne Shell) und läuft als `nonroot` mit
-schreibgeschütztem Dateisystem. Daten liegen im Volume `db-data` und überstehen Neustarts und Updates.
+## Schnellstart: Docker Compose
+
+```bash
+cp .env.example .env          # DB_PASSWORD, JWT_SECRET und BERICHTLY_DOMAIN setzen
+# Zertifikat auf dem Host beziehen (docs/HTTPS.md, Abschnitt Docker), dann:
+docker compose up -d --build
+docker compose ps             # nginx, server und db "healthy"?
+curl https://IHRE-DOMAIN/api/v1/health
+```
+
+Nur Nginx veröffentlicht Ports (80/443). Node.js und PostgreSQL hängen im internen Netz `backend` ohne
+Port-Freigabe und ohne Internetzugang. Daten liegen im Volume `db-data` (wie in 1.1).
+
+Lokale Entwicklung mit Docker (HTTP ohne TLS auf `127.0.0.1:8080`, Datenbank auf `127.0.0.1:5432`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+curl http://127.0.0.1:8080/api/v1/health
+```
 
 ## Kommandozeile
 
 ```
-berichtly-server [--env-file <pfad>] <befehl>
+berichtly-server [--env-file <pfad>] <befehl>        # bzw. node src/cli.ts …
 ```
 
 | Befehl | Zweck |
 |---|---|
-| `serve` | Server starten (Standard). SIGTERM/Strg+C: keine neuen Verbindungen, laufende Requests werden beendet, DB-Pool geschlossen |
+| `serve` | Server starten (Standard). SIGTERM/Strg+C: neue Anfragen erhalten 503, laufende werden beendet, DB-Pool geschlossen |
 | `migrate` | Datenbankmigrationen ausführen |
 | `migrate-status` | Stand jeder Migration (angewendet, ausstehend, nachträglich verändert) |
 | `db-check` | Datenbankverbindung, PostgreSQL-Version, Antwortzeit und Schema-Version prüfen |
@@ -103,15 +131,20 @@ berichtly-server [--env-file <pfad>] <befehl>
 
 ## Konfiguration
 
-Ausschließlich über **Umgebungsvariablen**; alle Variablen sind in [.env.example](.env.example) dokumentiert (ein
-Test stellt sicher, dass dort keine fehlt). Fehlende oder offensichtlich schwache Secrets verhindern den Start.
+Ausschließlich über **Umgebungsvariablen**; alle Variablen (Server, Datenbank, Nginx/Domain) sind in
+[.env.example](.env.example) dokumentiert – ein Test stellt sicher, dass dort keine fehlt und die Datei eine gültige
+Konfiguration ergibt. Die Beispielwerte sind für den **Produktionsbetrieb** voreingestellt; Secrets fehlen bewusst,
+und fehlende oder schwache Secrets verhindern den Start.
 
 | Variable | Bedeutung |
 |---|---|
-| `APP_ENV` | `development`, `test` oder `production` (Standard: `production`) |
-| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, **`DB_PASSWORD`**, `DB_SSLMODE` | Datenbankverbindung (oder `DB_URL`) |
+| `APP_ENV` | `production` (Standard), `development` oder `test` |
+| `BERICHTLY_DOMAIN` | Öffentliche Domain (nur für Nginx; steht nirgends fest im Code) |
+| `NGINX_CONFIG`, `NGINX_HTTP_PORT`, `NGINX_HTTPS_PORT`, `LETSENCRYPT_DIR`, `CERTBOT_WEBROOT` | Nur Docker Compose |
+| `SERVER_HOST`, `SERVER_PORT`, `TRUST_PROXY` | Standard `127.0.0.1:3000`; `TRUST_PROXY=true` hinter Nginx |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, **`DB_PASSWORD`**, `DB_SSLMODE`, `DB_SSL_CA_FILE` | Datenbankverbindung (oder `DB_URL`) |
 | **`JWT_SECRET`** | Base64, mindestens 32 Byte Zufall |
-| `SERVER_HOST`, `SERVER_PORT`, `TRUST_PROXY` | Standard `127.0.0.1:8080`; `TRUST_PROXY=true` nur hinter Reverse Proxy |
+| `MAX_REQUEST_BODY_BYTES`, `SHUTDOWN_TIMEOUT_SECONDS` | Body-Limit (1 MiB, passend zu Nginx) und Shutdown-Wartezeit |
 | `RATE_LIMIT_*` | Login, Login pro Konto, Registrierung, Refresh, übrige API |
 | `TOMBSTONE_RETENTION_DAYS`, `SYNC_OPERATION_RETENTION_DAYS`, `SECURITY_EVENT_RETENTION_DAYS`, `SESSION_RETENTION_DAYS`, `MAINTENANCE_INTERVAL_HOURS` | Aufbewahrung und Wartung |
 | `CORS_ALLOWED_ORIGINS` | Leer = CORS aus (die App braucht keins); `*` in Produktion verboten |
@@ -119,8 +152,9 @@ Test stellt sicher, dass dort keine fehlt). Fehlende oder offensichtlich schwach
 
 ## API im Überblick
 
-Basis `/api/v1`, JSON, `Authorization: Bearer <accessToken>`. Vollständig in [api/openapi.yaml](api/openapi.yaml)
-(Entwicklungsmodus: Swagger UI unter `/api/docs`). Ein Test stellt sicher, dass jede Route dokumentiert ist.
+Basis `https://<domain>/api/v1`, JSON, `Authorization: Bearer <accessToken>`. Vollständig in
+[api/openapi.yaml](api/openapi.yaml) (inkl. Betrieb hinter Nginx/HTTPS; Swagger UI unter `/api/docs`, wenn
+`API_DOCS_ENABLED=true`). Ein Test stellt sicher, dass jede Route dokumentiert ist und umgekehrt.
 
 ```
 GET    /health  /health/live  /health/ready                       öffentlich
@@ -137,33 +171,45 @@ POST   /devices   GET /devices   GET|PATCH|DELETE /devices/{id}
 ```
 
 Antwortformat und Android-Anbindung: [docs/API.md](docs/API.md) · Synchronisationsprotokoll: [docs/SYNC.md](docs/SYNC.md) ·
-Sicherheit: [docs/SECURITY.md](docs/SECURITY.md)
+Sicherheit: [docs/SECURITY.md](docs/SECURITY.md) · Betrieb, Logs, Monitoring: [docs/OPERATIONS.md](docs/OPERATIONS.md)
 
-## Entwicklung, Tests, Bauen
+## Entwicklung und Tests
 
-Voraussetzung: Go 1.27+ (nur zum Bauen).
+Voraussetzung: Node.js 24 LTS (enthält npm).
 
 ```bash
-make test-db        # Wegwerf-PostgreSQL in Docker (127.0.0.1:55432)
-make test           # alle Tests inkl. Integrationstests
-make test-perf      # Leistungstest mit 300 000 Berichten
-make lint           # gofmt + go vet
-make build          # bin/berichtly-server
-make release        # dist/berichtly-server-<version>-linux-{amd64,arm64}.tar.gz + SHA256SUMS
-make docker         # Container-Image
+npm ci                         # Abhängigkeiten exakt nach package-lock.json
+npm run typecheck              # TypeScript-Prüfung (tsc --noEmit)
+cp .env.example .env           # APP_ENV=development, DB_*, JWT_SECRET setzen
+docker compose -f docker-compose.db-only.yml up -d    # oder eine lokale PostgreSQL
+node src/cli.ts --env-file .env serve
 ```
 
-Integrationstests benötigen `BERICHTLY_TEST_DATABASE_URL` mit einer Datenbank, deren Name `test` enthält; ohne
-diese Variable werden sie übersprungen, die Unit-Tests laufen trotzdem.
+Tests:
+
+```bash
+make test-db                   # Wegwerf-PostgreSQL in Docker (127.0.0.1:55432)
+make test                      # Unit-, Integrations- und Nginx-Tests (Nginx-Tests, wenn nginx installiert ist)
+make test-perf                 # Leistungstest mit 300 000 Berichten
+```
+
+bzw. direkt `BERICHTLY_TEST_DATABASE_URL=postgres://…/berichtly_test NGINX_BIN=nginx npm test`. Ohne
+`BERICHTLY_TEST_DATABASE_URL` laufen nur die Unit-Tests, ohne `NGINX_BIN` werden die Nginx-Tests übersprungen.
 
 Abgedeckt sind u. a.: Registrierung, Login, Token-Erneuerung und -Wiederverwendung, Logout, "überall abmelden",
-Passwortänderung, Sitzungen, Geräteverwaltung, Benutzerisolierung (inkl. manipulierter IDs), Profil, Berichte
-(Erstellen, Bearbeiten, Löschen, Pagination, Filter), Datumslogik (Sommer-/Winterzeit, Jahreswechsel, ISO-Wochen),
-Synchronisationsszenarien (neues Gerät, bestehendes Berichtsheft, mehrere Geräte, Löschung, Wiederholung,
-Netzwerkabbruch, echter Konflikt, gleichzeitige Übertragung, abgelaufener Cursor, Wiederherstellung), Wartung,
-Migrationen (Upgrade 1.0 → 1.1 mit Bestandsdaten, Erkennung veränderter Migrationen) und Rate Limiting.
+Passwortänderung, Sitzungen, Geräteverwaltung, Benutzerisolierung (inkl. manipulierter IDs und `userId` im Body),
+Profil, Berichte (Erstellen, Bearbeiten, Löschen, Pagination, Filter), Datumslogik (Sommer-/Winterzeit,
+Jahreswechsel, ISO-Wochen), Synchronisationsszenarien (neues Gerät, bestehendes Berichtsheft, mehrere Geräte,
+Löschung, Wiederholung, Netzwerkabbruch, echter Konflikt, gleichzeitige Übertragung, abgelaufener Cursor,
+Wiederherstellung), Wartung, Migrationen (Upgrade 1.0 → 1.1 → 1.2 mit Bestandsdaten, Passwort-Hashes, Refresh
+Tokens und Sync-Operationen aus 1.1), kontrollierter Shutdown, Rate Limiting und der vollständige Weg
+**PostgreSQL → Node.js → Nginx** über HTTP und HTTPS (alle Methoden, Authorization-Header, X-Forwarded-For/-Proto,
+413/404-Fehlerformat, HTTP→HTTPS-Umleitung, nur TLS 1.2/1.3).
 
-## Roadmap (nach 1.1)
+Release-Archiv: `make release` (bzw. `./scripts/build-release.sh`) → `dist/berichtly-server-<version>.tar.gz`
+inklusive Laufzeitabhängigkeiten; Container-Image: `make docker`.
+
+## Roadmap (nach 1.2)
 
 - API-Client und optionale Synchronisierung in Berichtly 2.2 (Android)
 - Konto löschen und Datenexport über die API, Passwort-Reset per E-Mail

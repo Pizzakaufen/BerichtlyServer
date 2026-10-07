@@ -1,35 +1,39 @@
-# Installation und Betrieb unter Linux
+# Installation und Betrieb unter Linux – Berichtly Server 1.2
 
 Zielumgebung: Debian 12 / Ubuntu 24.04 oder vergleichbar, x86_64 oder arm64, mit systemd, ohne grafische
-Oberfläche. Alles wird über die Kommandozeile erledigt. Der Server ist eine einzige statische Binärdatei –
-auf dem Server werden weder Go noch Java oder andere Laufzeitumgebungen benötigt.
+Oberfläche. Alles wird über die Kommandozeile erledigt.
 
 ## Produktionsarchitektur
 
 ```
-Internet ──HTTPS:443──▶ Reverse Proxy (Nginx / Caddy / Traefik)
-                           │  TLS, HSTS, Body-Limit
-                           │  /api/*      → http://127.0.0.1:8080
-                           │  /internal/* → 404
-                           ▼
-                    Berichtly Server (127.0.0.1:8080, Benutzer "berichtly", systemd oder Docker)
-                           │  Connection-Pool (≤ 10 Verbindungen)
-                           ▼
-                    PostgreSQL (nur localhost bzw. privates Docker-Netz, niemals öffentlich)
+Internet ──HTTPS:443 / HTTP:80──▶ Nginx  (einziger öffentlicher Dienst)
+                                    │  TLS 1.2/1.3, HSTS, HTTP→HTTPS, Body-Limit, Grund-Rate-Limit
+                                    │  /api/*      → http://127.0.0.1:3000 (Keep-Alive)
+                                    │  /internal/*, alles andere → 404
+                                    ▼
+                          Node.js 24 LTS – Berichtly Server (127.0.0.1:3000, Benutzer "berichtly", systemd)
+                                    │  Connection-Pool (≤ 10 Verbindungen)
+                                    ▼
+                          PostgreSQL (nur localhost, niemals öffentlich)
 ```
 
-- Öffentlich sind nur Port 443 (und 80 für Zertifikate/Weiterleitung). Firewall z. B.:
-  `sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable`
-- PostgreSQL lauscht nur auf `localhost` (Standard bei Debian/Ubuntu) bzw. hat in Docker keine veröffentlichten Ports.
-- Der Server setzt `TRUST_PROXY=true`, damit das Rate Limiting die echte Client-IP aus `X-Forwarded-For` verwendet.
+- Öffentlich sind nur die Ports 80 und 443. Firewall z. B.:
+  `sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable` – Port 3000 und 5432 bleiben zu.
+- Node.js lauscht nur auf `127.0.0.1` (`SERVER_HOST`), PostgreSQL nur auf `localhost` (Standard bei Debian/Ubuntu).
+- `TRUST_PROXY=true`: Node.js übernimmt Client-IP und Protokoll von Nginx (genau ein vertrauenswürdiger Proxy).
 
-## Variante A: systemd (empfohlen)
+## Variante A: Linux direkt (systemd + Nginx)
 
 ### 1. Pakete
 
+Node.js 24 LTS ist in den Paketquellen von Debian 12/Ubuntu 24.04 nicht enthalten. Bezugsquellen: die offiziellen
+Linux-Binärpakete von nodejs.org (nach `/usr/local/lib/nodejs` entpacken und `/usr/bin/node` verlinken) oder das
+NodeSource-Repository. Die systemd-Unit erwartet `/usr/bin/node`.
+
 ```bash
 sudo apt update
-sudo apt install -y postgresql nginx certbot python3-certbot-nginx
+sudo apt install -y postgresql nginx certbot gettext-base
+node --version        # v24.x
 ```
 
 ### 2. Datenbank
@@ -42,22 +46,22 @@ CREATE DATABASE berichtly OWNER berichtly ENCODING 'UTF8';
 SQL
 ```
 
-### 3. Installieren
+### 3. Node.js-Server installieren
 
-Release-Archiv passend zur Architektur (`uname -m`: `x86_64` → amd64, `aarch64` → arm64) auf den Server kopieren,
-Prüfsumme kontrollieren und installieren:
+Release-Archiv auf den Server kopieren, Prüfsumme kontrollieren und installieren:
 
 ```bash
-sha256sum -c SHA256SUMS --ignore-missing
-tar xzf berichtly-server-1.1.0-linux-amd64.tar.gz
-cd berichtly-server-1.1.0-linux-amd64
+sha256sum -c SHA256SUMS
+tar xzf berichtly-server-1.2.0.tar.gz
+cd berichtly-server-1.2.0
 sudo ./deploy/install.sh
 ```
 
-`install.sh` legt den Systembenutzer `berichtly` (ohne Shell, ohne Home) an, installiert die Binärdatei nach
-`/opt/berichtly-server/` (gehört root, für den Dienst nur ausführbar), legt
-`/etc/berichtly-server/berichtly-server.env` an (Rechte `0640 root:berichtly`, wird nie überschrieben) und
-installiert die systemd-Unit.
+`install.sh` prüft die Node.js-Version, legt den Systembenutzer `berichtly` (ohne Shell, ohne Home) an,
+installiert das Programm nach `/opt/berichtly-server/` (gehört root, für den Dienst nur lesbar), verlinkt
+`/usr/local/bin/berichtly-server`, legt `/etc/berichtly-server/berichtly-server.env` an (Rechte
+`0640 root:berichtly`, wird nie überschrieben) und installiert die systemd-Unit. Das Release-Archiv enthält die
+Laufzeitabhängigkeiten bereits; auf dem Server wird kein npm und kein Internetzugang benötigt.
 
 ### 4. Konfigurieren
 
@@ -65,15 +69,16 @@ installiert die systemd-Unit.
 sudo nano /etc/berichtly-server/berichtly-server.env
 ```
 
-Mindestens `DB_PASSWORD`, `JWT_SECRET` (`openssl rand -base64 48`) und `TRUST_PROXY=true` setzen.
-Optional `INTERNAL_STATUS_TOKEN` (`openssl rand -hex 32`) und `REGISTRATION_ENABLED`.
+Mindestens `DB_PASSWORD` und `JWT_SECRET` (`openssl rand -base64 48`) setzen. `APP_ENV=production`,
+`SERVER_HOST=127.0.0.1`, `SERVER_PORT=3000` und `TRUST_PROXY=true` sind voreingestellt. Optional
+`INTERNAL_STATUS_TOKEN` (`openssl rand -hex 32`) und `REGISTRATION_ENABLED`.
 
 ```bash
 CONF=/etc/berichtly-server/berichtly-server.env
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF check-config
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF db-check     # Verbindung + Schema
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrate
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrate-status
+sudo -u berichtly berichtly-server --env-file $CONF check-config
+sudo -u berichtly berichtly-server --env-file $CONF db-check        # Verbindung + Schema
+sudo -u berichtly berichtly-server --env-file $CONF migrate
+sudo -u berichtly berichtly-server --env-file $CONF migrate-status
 ```
 
 ### 5. Starten, prüfen, stoppen
@@ -82,63 +87,83 @@ sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrat
 sudo systemctl enable --now berichtly-server        # "enable" = automatischer Start nach jedem Neustart
 systemctl status berichtly-server
 journalctl -u berichtly-server -f                     # JSON-Logs
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF healthcheck
+sudo -u berichtly berichtly-server --env-file $CONF healthcheck
+sudo systemctl restart berichtly-server
 sudo systemctl stop berichtly-server                  # kontrollierter Shutdown
 ```
 
-systemd sendet beim Stoppen und beim Neustart des Linux-Servers SIGTERM: Der Server nimmt keine neuen Verbindungen
-mehr an, beendet laufende Requests (höchstens `SHUTDOWN_TIMEOUT_SECONDS`) und schließt den Datenbank-Pool.
+Beim Stoppen und beim Neustart des Linux-Servers sendet systemd SIGTERM: Der Server beantwortet neue Anfragen mit
+`503 SERVICE_UNAVAILABLE`, beendet laufende Requests (höchstens `SHUTDOWN_TIMEOUT_SECONDS`, Standard 15 s),
+schließt Keep-Alive-Verbindungen und den Datenbank-Pool. `TimeoutStopSec=30` gibt ihm dafür genug Zeit.
 
-### 6. HTTPS mit Nginx
+### 6. Nginx und HTTPS
 
 ```bash
-sudo cp deploy/nginx/berichtly.conf /etc/nginx/sites-available/berichtly
-sudo sed -i 's/berichtly.example.de/IHRE-DOMAIN/g' /etc/nginx/sites-available/berichtly
-sudo certbot certonly --nginx -d IHRE-DOMAIN
-sudo ln -s /etc/nginx/sites-available/berichtly /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
+sudo ./deploy/install-nginx.sh berichtly.example.de http
+sudo certbot certonly --webroot -w /var/www/certbot -d berichtly.example.de --deploy-hook "systemctl reload nginx"
+sudo ./deploy/install-nginx.sh berichtly.example.de https
 ```
 
-Alternativ Caddy mit automatischem HTTPS: `deploy/caddy/Caddyfile`.
+Details, Erneuerung und Prüfung: [HTTPS.md](HTTPS.md).
+
+### Dienste im Überblick
+
+| Dienst | Befehle | Logs |
+|---|---|---|
+| `berichtly-server` | `sudo systemctl status/start/stop/restart berichtly-server`, `enable`/`disable` für den Autostart | `journalctl -u berichtly-server` |
+| `nginx` | `sudo nginx -t` (Konfiguration prüfen), `sudo systemctl reload nginx` (ohne Unterbrechung), `restart`, `status` | `/var/log/nginx/access.log` (JSON), `/var/log/nginx/error.log`, `journalctl -u nginx` |
+| `postgresql` | `sudo systemctl status/restart postgresql` | `journalctl -u postgresql`, `/var/log/postgresql/` |
+| Zertifikate | `systemctl list-timers certbot.timer`, `sudo certbot renew --dry-run` | `journalctl -u certbot` |
+
+Startreihenfolge: Die Unit von Berichtly Server startet nach `postgresql.service`. Ist die Datenbank noch nicht
+bereit, startet systemd den Dienst automatisch neu (`Restart=on-failure`). Nginx beantwortet Anfragen in dieser Zeit
+mit `503 SERVICE_UNAVAILABLE` im API-Format.
 
 ### Update
 
 Neues Release-Archiv entpacken und `sudo ./deploy/install.sh` ausführen. Läuft der Dienst bereits, führt das
-Skript die Migrationen aus und startet ihn neu. Vorher ein Backup erstellen (docs/BACKUP.md). Upgrade von
-1.0 Alpha: docs/UPGRADE.md.
+Skript die Migrationen aus und startet ihn neu; die Konfiguration bleibt unverändert. Vorher ein Backup erstellen
+([BACKUP.md](BACKUP.md)). Nginx-Snippets aktualisieren: `sudo ./deploy/install-nginx.sh <domain> https`.
+Upgrade von 1.1 (Go) auf 1.2 (Node.js): [UPGRADE.md](UPGRADE.md).
 
 ## Variante B: Docker Compose
 
+Drei Dienste: `nginx` (öffentlich, 80/443), `server` (Node.js, intern) und `db` (PostgreSQL 17, intern).
+
 ```bash
-cp .env.example .env
-# setzen: APP_ENV=production, DB_PASSWORD, JWT_SECRET, TRUST_PROXY=true, LOG_FORMAT=json, API_DOCS_ENABLED=false
+cp .env.example .env               # DB_PASSWORD, JWT_SECRET, BERICHTLY_DOMAIN setzen
+# Zertifikat beziehen: siehe HTTPS.md, Abschnitt "Docker Compose"
 docker compose up -d --build
-docker compose ps
+docker compose ps                  # alle drei "healthy"
+docker compose logs -f nginx server
 ```
 
-- Der Server ist nur unter `127.0.0.1:8080` veröffentlicht; Nginx/Caddy auf dem Host leitet dorthin weiter.
-- PostgreSQL hängt nur im internen Netz `backend` (ohne Internetzugang, ohne veröffentlichte Ports).
-- Der Server-Container läuft als `nonroot`, mit schreibgeschütztem Dateisystem und ohne Linux-Capabilities.
-- Daten liegen im Volume `berichtly_db-data`. Container starten bei Fehlern automatisch neu (`restart: unless-stopped`);
-  PostgreSQL wird beim Stoppen sauber heruntergefahren (`stop_grace_period: 60s`), Logs sind größenbegrenzt.
+- Nur Nginx veröffentlicht Ports. `server` und `db` hängen ausschließlich im internen Netz `backend`
+  (`internal: true`: nicht vom Host erreichbar, kein Internetzugang); Nginx ist zusätzlich im Netz `edge`.
+- Startreihenfolge über Healthchecks: `db` (echtes `pg_isready`) → `server` (`/api/v1/health/ready`: Datenbank
+  erreichbar und Schema aktuell) → `nginx`.
+- Der Server-Container läuft als Benutzer `node` (nicht root), mit schreibgeschütztem Dateisystem, ohne
+  Linux-Capabilities und mit `no-new-privileges`.
+- Daten liegen im Volume `berichtly_db-data` und überstehen Neustarts, `docker compose down` und Updates. Nur
+  `docker compose down -v` löscht sie.
+- PostgreSQL bleibt auf Hauptversion 17 (wie in 1.1); ein Wechsel der Hauptversion erfordert Dump und Restore.
+- Logs: Docker `json-file` mit Rotation (10 MB × 5 pro Container).
+
+Entwicklung: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build` startet Nginx ohne TLS auf
+`127.0.0.1:8080`, den Server im Entwicklungsmodus und macht PostgreSQL auf `127.0.0.1:5432` erreichbar. Ohne die
+Dev-Datei gilt immer die Produktionskonfiguration.
+
+Befehle in Containern: `docker compose exec server node src/cli.ts migrate-status` bzw. `… db-check`,
+`… maintenance`.
 
 ## Wartung
 
 Der Server entfernt einmal täglich (`MAINTENANCE_INTERVAL_HOURS`) Daten, deren Aufbewahrungsfrist abgelaufen ist:
 alte Tombstones (365 Tage), Idempotenz-Einträge (30 Tage), Sicherheitsereignisse (180 Tage) und abgelaufene oder
 widerrufene Sitzungen (30 Tage). Bei mehreren Instanzen läuft die Wartung dank Datenbanksperre nur einmal.
-Alternativ `MAINTENANCE_INTERVAL_HOURS=0` und per Cron `berichtly-server maintenance`.
+Alternativ `MAINTENANCE_INTERVAL_HOURS=0` und per Timer/Cron `berichtly-server maintenance`.
 
-## Backups
+## Backups, Logs und Monitoring
 
-Siehe docs/BACKUP.md (pg_dump, Ablage außerhalb des Servers, Wiederherstellung mit `reset-sync-cursors`).
-
-## Monitoring
-
-- `GET /api/v1/health` → `200` (gesund) bzw. `503` (Datenbank nicht erreichbar) – für Uptime-Monitore.
-- `GET /api/v1/health/live` → Prozess antwortet (Liveness, ohne Datenbank).
-- `GET /api/v1/health/ready` → Datenbank erreichbar **und** Schema aktuell (Readiness; vom Docker-Healthcheck
-  und `berichtly-server healthcheck` verwendet).
-- `GET /internal/status` mit `Authorization: Bearer $INTERNAL_STATUS_TOKEN` → Datenbanklatenz, Schema-Version,
-  Pool-Auslastung, Speicher, freier Plattenplatz, Request- und Fehlerzähler. Nur intern abfragen:
-  `curl -H "Authorization: Bearer …" http://127.0.0.1:8080/internal/status`
+- Backups: [BACKUP.md](BACKUP.md) (pg_dump, Ablage außerhalb des Servers, Wiederherstellung mit `reset-sync-cursors`).
+- Logs, Log-Rotation, Health-Checks und interner Status: [OPERATIONS.md](OPERATIONS.md).

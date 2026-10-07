@@ -1,6 +1,7 @@
-# systemd-Unit für Berichtly Server.
-# Berichtly Server 1.1 – Installation: deploy/install.sh (siehe docs/DEPLOYMENT.md).
+# systemd-Unit für Berichtly Server 1.2 (Node.js).
+# Installation: deploy/install.sh (siehe docs/DEPLOYMENT.md).
 # Secrets stehen ausschließlich in der EnvironmentFile (Rechte 0640 root:berichtly), nie in dieser Datei.
+# Node.js lauscht nur auf 127.0.0.1 (SERVER_HOST); öffentlich erreichbar ist allein Nginx.
 [Unit]
 Description=Berichtly Server (Backend für die Berichtly-Android-App)
 Documentation=file:///opt/berichtly-server/README.md
@@ -16,9 +17,10 @@ User=berichtly
 Group=berichtly
 WorkingDirectory=/opt/berichtly-server
 EnvironmentFile=/etc/berichtly-server/berichtly-server.env
-ExecStart=/opt/berichtly-server/berichtly-server serve
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/berichtly-server/src/cli.ts serve
 
-# Kontrollierter Shutdown: SIGTERM -> keine neuen Verbindungen, laufende Requests werden beendet,
+# Kontrollierter Shutdown: SIGTERM -> keine neuen Anfragen (503), laufende Requests werden beendet,
 # danach wird der Datenbank-Pool geschlossen (SHUTDOWN_TIMEOUT_SECONDS, Standard 15 s).
 KillSignal=SIGTERM
 TimeoutStopSec=30
@@ -26,7 +28,13 @@ TimeoutStartSec=120
 Restart=on-failure
 RestartSec=5
 
+# Logs gehen nach journald (stdout/stderr); Rotation über journald (SystemMaxUse, siehe docs/OPERATIONS.md).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=berichtly-server
+
 # Härtung: kein root, keine zusätzlichen Rechte, nur lesender Zugriff auf das System.
+# (MemoryDenyWriteExecute ist für Node.js nicht möglich: der JIT-Compiler benötigt ausführbaren Speicher.)
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -45,7 +53,6 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 RestrictNamespaces=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-MemoryDenyWriteExecute=true
 LockPersonality=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service

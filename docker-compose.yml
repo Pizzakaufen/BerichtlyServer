@@ -1,25 +1,31 @@
-# Berichtly Server 1.1 + PostgreSQL (lokale Entwicklung oder Einzelserver-Betrieb).
+# Berichtly Server 1.2 – Produktionsbetrieb mit Docker Compose: Nginx (HTTPS) → Node.js → PostgreSQL.
 #
-#   cp .env.example .env    # DB_PASSWORD und JWT_SECRET setzen
+#   cp .env.example .env          # DB_PASSWORD, JWT_SECRET und BERICHTLY_DOMAIN setzen
 #   docker compose up -d --build
-#   docker compose ps       # Status inkl. Health-Checks
-#   docker compose logs -f server
-#   docker compose down     # stoppen (Daten bleiben im Volume)
+#   docker compose ps             # Status inkl. Health-Checks
+#   docker compose logs -f server nginx
+#   docker compose down           # stoppen (Daten bleiben im Volume)
+#
+# Entwicklung (HTTP ohne TLS, Datenbank auf 127.0.0.1): siehe docker-compose.dev.yml.
 #
 # Sicherheit:
-# - PostgreSQL hat KEINE veröffentlichten Ports und hängt nur im internen Netz "backend".
-# - Der Server ist nur auf 127.0.0.1 veröffentlicht; HTTPS übernimmt ein Reverse Proxy.
-# - Keine Passwörter in dieser Datei; alles kommt aus .env.
-# - Datenbankdaten liegen im benannten Volume "db-data" und überstehen Neustarts und Updates.
+# - Nur Nginx veröffentlicht Ports (80/443). Node.js und PostgreSQL haben KEINE veröffentlichten Ports und hängen
+#   im internen Netz "backend" ohne Internetzugang.
+# - Keine Passwörter oder Zertifikate in dieser Datei; Secrets kommen aus .env, Zertifikate vom Host
+#   (/etc/letsencrypt, nur lesend eingebunden) – siehe docs/HTTPS.md.
+# - Datenbankdaten liegen im benannten Volume "db-data" (gleicher Name wie in 1.1) und überstehen Neustarts,
+#   Updates und "docker compose down". Nur "docker compose down -v" löscht sie.
 
 name: berichtly
 
 x-logging: &logging
   driver: json-file
-  options: { max-size: "10m", max-file: "5" }  # Logs begrenzen, damit die Platte nicht vollläuft
+  options: { max-size: "10m", max-file: "5" }  # Log-Rotation durch Docker, damit die Platte nicht vollläuft
 
 services:
   db:
+    # Hauptversion nicht ändern: Ein neues PostgreSQL-Hauptrelease kann das bestehende Datenverzeichnis nicht
+    # lesen (Upgrade nur per pg_dump/pg_restore, siehe docs/UPGRADE.md).
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
@@ -30,48 +36,76 @@ services:
       - db-data:/var/lib/postgresql/data
     networks: [backend]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
       timeout: 5s
+      start_period: 30s
       retries: 10
     stop_grace_period: 60s   # PostgreSQL sauber herunterfahren lassen
     logging: *logging
 
   server:
-    build:
-      context: .
-      args: { VERSION: "1.1.0" }
-    image: berichtly-server:1.1.0
+    build: .
+    image: berichtly-server:1.2.0
     restart: unless-stopped
     env_file: .env
     environment:
       DB_HOST: db
       DB_PORT: "5432"
-      DB_SSLMODE: disable   # Verbindung bleibt im privaten Docker-Netz
-      SERVER_HOST: 0.0.0.0
-      SERVER_PORT: "8080"
+      DB_SSLMODE: disable    # Verbindung bleibt im internen Docker-Netz
+      SERVER_HOST: 0.0.0.0   # nur im internen Netz erreichbar (keine veröffentlichten Ports)
+      SERVER_PORT: "3000"
+      TRUST_PROXY: "true"    # einziger Weg zum Server ist Nginx
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:${SERVER_PUBLISHED_PORT:-8080}:8080"
-    networks: [backend, frontend]
+    networks: [backend]
     healthcheck:
-      test: ["CMD", "/usr/local/bin/berichtly-server", "healthcheck"]
+      test: ["CMD", "node", "src/cli.ts", "healthcheck"]
       interval: 30s
       timeout: 10s
       start_period: 30s
       retries: 3
     read_only: true
+    tmpfs: [/tmp]
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
-    stop_grace_period: 30s
+    stop_grace_period: 30s   # > SHUTDOWN_TIMEOUT_SECONDS (Standard 15 s)
+    logging: *logging
+
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    environment:
+      BERICHTLY_DOMAIN: ${BERICHTLY_DOMAIN:?BERICHTLY_DOMAIN muss in .env gesetzt sein}
+      BERICHTLY_UPSTREAM: server:3000
+    volumes:
+      # Vorlage wird beim Start zu /etc/nginx/conf.d/default.conf (ersetzt die Standardseite).
+      - ./deploy/nginx/templates/berichtly-${NGINX_CONFIG:-https}.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/nginx/snippets:/etc/nginx/snippets:ro
+      - ./deploy/nginx/docker-health.conf:/etc/nginx/conf.d/health.conf:ro
+      # Zertifikate vom Host (Certbot läuft auf dem Host, siehe docs/HTTPS.md) und Webroot für die ACME-Prüfung.
+      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
+      - ${CERTBOT_WEBROOT:-./deploy/certbot/www}:/var/www/certbot:ro
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    depends_on:
+      server:
+        condition: service_healthy
+    networks: [edge, backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8099/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    stop_grace_period: 15s
     logging: *logging
 
 networks:
   backend:
-    internal: true   # kein Internetzugang, nur Server <-> Datenbank
-  frontend: {}
+    internal: true   # kein Internetzugang, nicht vom Host erreichbar: Nginx ↔ Node.js ↔ PostgreSQL
+  edge: {}           # nur für die veröffentlichten Ports von Nginx
 
 volumes:
   db-data:

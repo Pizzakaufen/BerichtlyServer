@@ -1,10 +1,12 @@
 .git
 .idea
 .vscode
-bin
+node_modules
 dist
 deploy
 docs
+test
+scripts
 *.md
 .env
 .env.*

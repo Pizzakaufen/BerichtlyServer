@@ -1,4 +1,4 @@
-# Nur PostgreSQL für die Entwicklung, wenn der Server direkt (ohne Docker) läuft:
+# Nur PostgreSQL für die Entwicklung, wenn Node.js direkt (ohne Docker) läuft:
 #   docker compose -f docker-compose.db-only.yml up -d
 # Die Datenbank ist ausschließlich über 127.0.0.1 erreichbar – niemals öffentlich.
 
@@ -16,6 +16,11 @@ services:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - dev-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
   dev-db-data:

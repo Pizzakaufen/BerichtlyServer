@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// Startskript: berichtly-server [--env-file <pfad>] <befehl>
+// Node.js >= 24 führt TypeScript direkt aus (Type Stripping) – kein Build-Schritt nötig.
+import '../src/cli.ts';

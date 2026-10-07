@@ -1,13 +1,13 @@
 # Backup und Wiederherstellung
 
-Alle Daten von Berichtly Server liegen in PostgreSQL. Der Server selbst ist zustandslos (die Binärdatei und die
+Alle Daten von Berichtly Server liegen in PostgreSQL. Der Server selbst ist zustandslos (Programm, Nginx-Konfiguration und
 Konfigurationsdatei lassen sich jederzeit neu installieren). Gesichert werden müssen also:
 
 1. die **Datenbank** (regelmäßig) und
 2. die **Konfiguration** `/etc/berichtly-server/berichtly-server.env` bzw. `.env` (einmalig und nach Änderungen;
    enthält Secrets – getrennt und verschlüsselt aufbewahren).
 
-Berichtly Server 1.1 enthält bewusst **keine eingebaute automatische Backup-Funktion**: Ein Backup, das auf
+Berichtly Server 1.2 enthält bewusst **keine eingebaute automatische Backup-Funktion**: Ein Backup, das auf
 demselben Server oder im selben Container liegt, schützt nicht vor Plattenausfall, Fehlbedienung oder
 Kompromittierung. Zuverlässig ist ein Ablauf, der die Sicherung **außerhalb** des Servers ablegt – dafür sind die
 Standardwerkzeuge von PostgreSQL gedacht.
@@ -63,10 +63,10 @@ docker compose exec -T db pg_restore -U berichtly --dbname=berichtly --no-owner 
 
 # 3. Schema prüfen (bei Backup einer älteren Version werden fehlende Migrationen ergänzt)
 CONF=/etc/berichtly-server/berichtly-server.env
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF migrate
+sudo -u berichtly berichtly-server --env-file $CONF migrate
 
 # 4. WICHTIG: Sync-Cursor zurücksetzen (siehe unten), dann starten
-sudo -u berichtly /opt/berichtly-server/berichtly-server --env-file $CONF reset-sync-cursors
+sudo -u berichtly berichtly-server --env-file $CONF reset-sync-cursors
 sudo systemctl start berichtly-server
 # Docker Compose: docker compose run --rm server reset-sync-cursors && docker compose up -d
 ```
@@ -80,4 +80,4 @@ die neuen Änderungsnummern – sie würden neue Änderungen übersehen.
 `reset-sync-cursors` setzt den Zähler weit nach vorne und erklärt alle bisher ausgestellten Cursor für ungültig.
 Jedes Gerät erhält beim nächsten Abruf `410 SYNC_CURSOR_EXPIRED`, synchronisiert vollständig neu (`cursor=0`) und
 lädt dabei seine lokal neueren Änderungen wieder hoch. Da Berichts-IDs stabil sind, entstehen keine Duplikate.
-Dieser Ablauf ist automatisiert getestet (`TestSyncCursorZuruecksetzenNachWiederherstellung`).
+Dieser Ablauf ist automatisiert getestet (`test/integration/sync-scenarios.test.ts`, "Cursor zurücksetzen nach Wiederherstellung").

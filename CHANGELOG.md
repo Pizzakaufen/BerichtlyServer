@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.2.0 – 2026-10-07
+
+Neue Laufzeit und neuer öffentlicher Zugang – gleiche API, gleiche Datenbank. Upgrade von 1.1 ohne Datenverlust;
+angemeldete Apps bleiben angemeldet (docs/UPGRADE.md).
+
+### Laufzeit: Node.js
+- Server vollständig auf **Node.js 24 LTS** portiert (TypeScript, direkt von Node.js ausgeführt; Fastify 5,
+  node-postgres). Alle 39 Endpunkte von `/api/v1` mit identischen Feldern, Statuscodes und Fehlercodes; ein Test
+  gleicht Routen und OpenAPI in beide Richtungen ab.
+- Kompatibel mit Bestandsdaten aus 1.1: Argon2id-Hashes (jetzt `node:crypto`), JWT- und Refresh-Token-Format,
+  Sync-Cursor, Migrationen 0001/0002 byteidentisch.
+- Migration `0003_server_1_2.sql` (additiv): `sync_operations.hash_format` – Wiederholungen von Operationen, die 1.1
+  verarbeitet hat, werden weiterhin erkannt; Index für den Synchronisationsstatus der Geräte.
+- Standardport jetzt `3000` (nur `127.0.0.1`); vorhandene Konfigurationen mit 8080 funktionieren weiter.
+- Neuer Fehlercode `SERVICE_UNAVAILABLE` (503 mit `Retry-After`): während des Shutdowns und bei nicht erreichbarer
+  Datenbank (vorher 500).
+- Kontrollierter Shutdown: neue Anfragen 503 mit `Connection: close`, laufende werden beendet, Keep-Alive-
+  Verbindungen geschlossen, danach der Datenbank-Pool.
+- Request-Log zusätzlich mit `proto` (http/https zwischen App und Nginx).
+
+### Öffentlicher Zugang: Nginx
+- Nginx ist der einzige öffentliche Dienst: Vorlagen für Produktion (HTTPS) und Entwicklung/Ersteinrichtung (HTTP),
+  Domain nur als Variable. TLS 1.2/1.3, HTTP→HTTPS (308), HSTS (genau einmal), Body-Limit 1 MiB,
+  Grund-Rate-Limit pro IP (strenger für Auth), Keep-Alive zum Upstream, Timeouts, `/internal/` gesperrt.
+- Weitergabe von `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Real-IP` und `X-Request-ID`; dieselbe Request-ID in
+  Nginx- und Server-Log. Fehler von Nginx im Fehlerformat der API.
+- Let's Encrypt über Certbot (Webroot) mit dokumentierter, über den Certbot-Timer automatischer Erneuerung.
+- `deploy/install-nginx.sh` rendert die Vorlage, prüft mit `nginx -t` und aktiviert sie.
+- Caddy-Vorlage entfernt (Nginx ist der unterstützte Zugang).
+
+### Docker Compose
+- Drei Dienste: `nginx` (einziger mit veröffentlichten Ports), `server` und `db` im internen Netz ohne
+  Internetzugang. Healthchecks (`pg_isready`, Readiness, Nginx), Startreihenfolge über `depends_on`.
+- Entwicklungsdatei `docker-compose.dev.yml` (HTTP auf 127.0.0.1, Datenbank-Port nur lokal); ohne sie gilt immer
+  die Produktionskonfiguration. Datenbank-Volume aus 1.1 wird weiterverwendet.
+- Server-Image auf `node:24-alpine`, Benutzer `node`, schreibgeschützt, ohne Capabilities.
+
+### Betrieb und Dokumentation
+- systemd-Unit für Node.js (EnvironmentFile, keine Secrets, Autostart, Härtung), `install.sh` prüft Node.js ≥ 24.
+- `.env.example` vollständig inklusive Domain- und Nginx-Variablen, mit sicheren Produktionswerten.
+- Neue Dokumente: HTTPS.md, OPERATIONS.md (Logs, Log-Rotation über journald/logrotate/Docker, Monitoring);
+  DEPLOYMENT.md, UPGRADE.md (1.1 → 1.2), ARCHITECTURE.md, SECURITY.md und OpenAPI 1.2 (Betrieb hinter Nginx/HTTPS)
+  aktualisiert.
+- Release-Archiv `berichtly-server-<version>.tar.gz` inklusive Laufzeitabhängigkeiten (keine nativen Module,
+  für amd64 und arm64 gleich).
+
+### Tests
+- Alle Tests auf `node:test` portiert: Unit-Tests, Integrationstests gegen PostgreSQL, Upgrade 1.0 → 1.1 → 1.2 mit
+  Bestandsdaten aus dem Go-Server, Leistungstest (300 000 Berichte, opt-in).
+- Neu: Full-Stack-Tests PostgreSQL → Node.js → echtes Nginx über HTTP und HTTPS (alle Methoden, Authorization,
+  X-Forwarded-For/-Proto, 413/404/429, Umleitung, TLS-Versionen), kontrollierter Shutdown, Client-IP hinter dem Proxy.
+- Behoben (durch die Nginx-Tests gefunden): Pfade mit Dateiendung (`/index.html`) erhielten von Nginx `text/html`
+  statt JSON; `/api` ohne Schrägstrich wurde umgeleitet statt mit 404 beantwortet.
+
 ## 1.1.0 – 2026-10-04
 
 Stabile Weiterentwicklung von 1.0 Alpha. Upgrade ohne Datenverlust (docs/UPGRADE.md); alle 1.0-Endpunkte

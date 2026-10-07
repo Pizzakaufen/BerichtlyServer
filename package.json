@@ -1,0 +1,35 @@
+{
+  "name": "berichtly-server",
+  "version": "1.2.0",
+  "description": "Berichtly Server – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "bin": {
+    "berichtly-server": "bin/berichtly-server"
+  },
+  "scripts": {
+    "start": "node src/cli.ts serve",
+    "migrate": "node src/cli.ts migrate",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 \"test/unit/*.test.ts\" \"test/integration/*.test.ts\" \"test/nginx/*.test.ts\"",
+    "test:unit": "node --test \"test/unit/*.test.ts\"",
+    "test:integration": "node --test --test-concurrency=1 \"test/integration/*.test.ts\"",
+    "test:nginx": "node --test \"test/nginx/*.test.ts\"",
+    "test:perf": "node --test \"test/perf/*.test.ts\"",
+    "lint": "npm run typecheck"
+  },
+  "dependencies": {
+    "fastify": "5.12.5",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
+  }
+}

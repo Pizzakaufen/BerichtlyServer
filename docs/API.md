@@ -6,11 +6,20 @@ Test stellt sicher, dass jede Route des Servers darin dokumentiert ist.
 
 ## Versionierung
 
-Alle Endpunkte liegen unter **`/api/v1`** und werden im Code in einer eigenen Funktion (`routesV1`) registriert.
-Innerhalb von v1 gibt es nur abwärtskompatible Änderungen (neue Endpunkte, neue optionale Felder) – so auch in 1.1
-(Liste der Ergänzungen: [UPGRADE.md](UPGRADE.md)). Inkompatible Änderungen erscheinen unter `/api/v2` (eigene
-Funktion `routesV2`), während v1 für bestehende App-Versionen weiterläuft. Der Server ignoriert unbekannte Felder in
+Alle Endpunkte liegen unter **`/api/v1`** und werden im Code in einer eigenen Datei (`src/http/routes-v1.ts`)
+registriert. Innerhalb von v1 gibt es nur abwärtskompatible Änderungen (neue Endpunkte, neue optionale Felder) –
+so auch in 1.1; 1.2 (Node.js) lässt v1 unverändert (Liste der Ergänzungen: [UPGRADE.md](UPGRADE.md)). Inkompatible
+Änderungen erscheinen unter `/api/v2` (eigene Datei `routes-v2.ts`), während v1 für bestehende App-Versionen
+weiterläuft. Der Server ignoriert unbekannte Felder in
 Anfragen; die App sollte unbekannte Felder in Antworten ebenfalls ignorieren (`ignoreUnknownKeys = true`).
+
+## Basis-URL und Transport
+
+Die App spricht ausschließlich `https://<domain>/api/v1/...` an (Nginx, TLS 1.2/1.3). HTTP wird mit `308` auf HTTPS
+umgeleitet, die App sollte aber nie HTTP verwenden (Android blockiert Klartext ohnehin standardmäßig). Bei
+`503 SERVICE_UNAVAILABLE` (Neustart, Update, Datenbank nicht erreichbar) später erneut versuchen und `Retry-After`
+beachten; Sync-Operationen mit `operationId` dürfen gefahrlos wiederholt werden. Eine eigene `X-Request-ID` der App
+(8–64 Zeichen `[A-Za-z0-9_-]`) wird von Nginx und Server übernommen und erleichtert die Fehlersuche.
 
 ## Antwortformat
 

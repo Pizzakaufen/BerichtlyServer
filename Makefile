@@ -1,31 +1,38 @@
-# Berichtly Server – Build- und Entwicklungsbefehle (GNU make, Linux).
+# Berichtly Server 1.2 – Entwicklungsbefehle (GNU make, Linux). Alle Befehle gibt es auch als "npm run …".
 
 VERSION      ?= $(shell cat VERSION)
-BINARY       := berichtly-server
-LDFLAGS      := -s -w -X berichtly-server/internal/app.Version=$(VERSION)
 TEST_DB_URL  ?= postgres://berichtly:berichtly-test@127.0.0.1:55432/berichtly_test?sslmode=disable
+NGINX_BIN    ?= $(shell command -v nginx)
 
-.PHONY: build run test test-race test-perf test-db test-db-stop lint release docker clean
+.PHONY: install run typecheck test test-unit test-nginx test-perf test-db test-db-stop release docker clean
 
-## build: statisch gelinkte Linux-Binärdatei nach bin/ bauen
-build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/berichtly-server
+## install: Abhängigkeiten exakt nach package-lock.json installieren
+install:
+	npm ci
 
 ## run: Server lokal mit .env starten
-run: build
-	./bin/$(BINARY) --env-file .env serve
+run:
+	node src/cli.ts --env-file .env serve
 
-## test: Unit- und Integrationstests (benötigt PostgreSQL, siehe test-db)
-test:
-	BERICHTLY_TEST_DATABASE_URL="$(TEST_DB_URL)" go test -p 1 -count=1 ./...
+## typecheck: TypeScript-Typprüfung (kein Build nötig – Node.js führt TypeScript direkt aus)
+typecheck:
+	npx tsc --noEmit
+
+## test: Unit-, Integrations- und (falls Nginx installiert ist) Nginx-Tests gegen PostgreSQL (siehe test-db)
+test: typecheck
+	BERICHTLY_TEST_DATABASE_URL="$(TEST_DB_URL)" NGINX_BIN="$(NGINX_BIN)" npm test
+
+## test-unit: nur Unit-Tests (ohne Datenbank)
+test-unit:
+	npm run test:unit
+
+## test-nginx: Full-Stack-Tests PostgreSQL → Node.js → Nginx (HTTP und HTTPS)
+test-nginx:
+	BERICHTLY_TEST_DATABASE_URL="$(TEST_DB_URL)" NGINX_BIN="$(NGINX_BIN)" npm run test:nginx
 
 ## test-perf: Leistungstest mit 300 000 Berichten (ca. 1 Minute)
 test-perf:
-	BERICHTLY_TEST_DATABASE_URL="$(TEST_DB_URL)" BERICHTLY_PERF_TEST=1 go test -count=1 -run TestLeistung -v ./internal/httpapi/
-
-## test-race: wie test, zusätzlich mit Race-Detector (benötigt gcc, CGO)
-test-race:
-	BERICHTLY_TEST_DATABASE_URL="$(TEST_DB_URL)" CGO_ENABLED=1 go test -p 1 -count=1 -race ./...
+	BERICHTLY_TEST_DATABASE_URL="$(TEST_DB_URL)" BERICHTLY_PERF_TEST=1 npm run test:perf
 
 ## test-db: Wegwerf-PostgreSQL für Tests starten (Docker, nur 127.0.0.1)
 test-db:
@@ -37,18 +44,13 @@ test-db:
 test-db-stop:
 	docker stop berichtly-test-db
 
-## lint: Formatierung und statische Analyse
-lint:
-	@test -z "$$(gofmt -l .)" || (echo "Nicht formatiert:"; gofmt -l .; exit 1)
-	go vet ./...
-
-## release: Linux-Release-Archive (amd64 + arm64) nach dist/
+## release: Linux-Release-Archiv (inkl. Laufzeitabhängigkeiten) nach dist/
 release:
 	VERSION=$(VERSION) ./scripts/build-release.sh
 
 ## docker: Container-Image bauen
 docker:
-	docker build --build-arg VERSION=$(VERSION) -t berichtly-server:$(VERSION) .
+	docker build -t berichtly-server:$(VERSION) .
 
 clean:
-	rm -rf bin dist
+	rm -rf dist

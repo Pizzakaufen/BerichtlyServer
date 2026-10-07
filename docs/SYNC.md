@@ -1,9 +1,9 @@
-# Synchronisierung – Konzept und Protokoll (Berichtly Server 1.1)
+# Synchronisierung – Konzept und Protokoll (Berichtly Server 1.2)
 
-Berichtly Server 1.1 stellt die vollständige **Server-Seite** der Synchronisierung bereit. Die Android-App
+Berichtly Server stellt seit 1.1 die vollständige **Server-Seite** der Synchronisierung bereit. Die Android-App
 (Berichtly 2.2) synchronisiert noch nicht; dieses Dokument beschreibt das Protokoll, das ihr API-Client umsetzen soll.
 Alle hier beschriebenen Abläufe sind durch Integrationstests gegen PostgreSQL abgesichert
-(`internal/httpapi/sync_*_test.go`).
+(`test/integration/sync*.test.ts`); 1.2 hat das Protokoll unverändert übernommen.
 
 ## Grundbausteine
 
@@ -144,7 +144,7 @@ Nach dem **Einspielen eines Backups** muss der Betreiber `berichtly-server reset
   werden dadurch in Commit-Reihenfolge vergeben.
 - Ein Abruf liest alle Tabellen aus **einem** konsistenten Datenbank-Snapshot (REPEATABLE READ). Ohne das könnte
   eine zwischen zwei Abfragen committete Änderung übersprungen werden (in 1.0 Alpha gefunden und in 1.1 behoben;
-  Regressionstest `TestPullVerliertKeineAenderungenBeiGleichzeitigenSchreibvorgaengen`).
+  Regressionstest sync-consistency: „Pull verliert keine Änderungen bei gleichzeitigen Schreibvorgängen“).
 
 ## Was der Server bewusst nicht tut
 
@@ -156,11 +156,11 @@ Nach dem **Einspielen eines Backups** muss der Betreiber `berichtly-server reset
 
 | Szenario | Test |
 |---|---|
-| Neues Gerät mit leerer Datenbank, bestehendes Berichtsheft (250 Berichte, mehrere Pakete/Seiten) | `TestSyncSzenarioNeuesGeraetMitBestehendemBerichtsheft` |
-| Änderungen auf mehreren Geräten, Löschung erreicht alle Geräte | `TestSyncSzenarioAenderungenAufMehrerenGeraetenUndLoeschung` |
-| Echter Konflikt zwischen zwei Geräten inkl. Auflösung | `TestSyncSzenarioEchterKonfliktZwischenZweiGeraeten` |
-| Wiederholte Operation, verlorene Antwort, abgebrochener Abruf, fehlgeschlagener Sync | `TestSyncSzenarioWiederholteOperationUndNetzwerkabbruch` |
-| Gleichzeitige doppelte Übertragung | `TestSyncGleichzeitigeDoppelteUebertragungErzeugtKeinDuplikat` |
-| Gleichzeitige Schreibvorgänge während des Abrufs | `TestPullVerliertKeineAenderungenBeiGleichzeitigenSchreibvorgaengen` |
-| Abgelaufener Cursor, mehrseitige Neusynchronisierung | `TestSyncAbgelaufenerCursorNachTombstoneBereinigung` |
-| Wiederherstellung aus Backup | `TestSyncCursorZuruecksetzenNachWiederherstellung` |
+| Neues Gerät mit leerer Datenbank, bestehendes Berichtsheft (250 Berichte, mehrere Pakete/Seiten) | sync-scenarios: „neues Gerät mit bestehendem Berichtsheft“ |
+| Änderungen auf mehreren Geräten, Löschung erreicht alle Geräte | sync-scenarios: „Änderungen auf mehreren Geräten und Löschung“ |
+| Echter Konflikt zwischen zwei Geräten inkl. Auflösung | sync-scenarios: „echter Konflikt zwischen zwei Geräten“ |
+| Wiederholte Operation, verlorene Antwort, abgebrochener Abruf, fehlgeschlagener Sync | sync-scenarios: „wiederholte Operation und Netzwerkabbruch“ |
+| Gleichzeitige doppelte Übertragung | sync-scenarios: „gleichzeitige doppelte Übertragung erzeugt kein Duplikat“ |
+| Gleichzeitige Schreibvorgänge während des Abrufs | sync-consistency: „Pull verliert keine Änderungen bei gleichzeitigen Schreibvorgängen“ |
+| Abgelaufener Cursor, mehrseitige Neusynchronisierung | sync-scenarios: „abgelaufener Cursor nach Tombstone-Bereinigung“ |
+| Wiederherstellung aus Backup | sync-scenarios: „Cursor zurücksetzen nach Wiederherstellung“ |

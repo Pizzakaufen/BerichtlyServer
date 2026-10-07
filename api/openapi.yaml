@@ -1,14 +1,14 @@
 openapi: 3.0.3
 info:
   title: Berichtly Server API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     REST-API des Berichtly Servers – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App.
 
     ## Konventionen
     - Alle Endpunkte liegen unter `/api/v1`. Inkompatible Änderungen erscheinen später unter `/api/v2`;
       v1 bleibt dann für bestehende App-Versionen erhalten. 1.1 hat v1 nur kompatibel erweitert
-      (neue Endpunkte, neue optionale Felder) – siehe docs/UPGRADE.md.
+      (neue Endpunkte, neue optionale Felder); 1.2 (Node.js) ändert an v1 nichts – siehe docs/UPGRADE.md.
     - Erfolgreiche Antworten: `{"data": ...}`. Listen zusätzlich `{"meta": {page, limit, total, hasMore}}`.
     - Fehler: `{"error": {"code", "message", "requestId", "details", "conflict"}}` mit stabilem `code`.
       Es werden nie Stacktraces, SQL oder interne Pfade gesendet.
@@ -39,8 +39,26 @@ info:
 
     ## Rate Limiting
     Überschreitungen werden mit `429 RATE_LIMITED` und Header `Retry-After` (Sekunden) beantwortet.
+    Nginx begrenzt zusätzlich grob pro IP; auch diese Antworten haben das Fehlerformat der API.
+
+    ## Betrieb hinter Nginx (HTTPS)
+    - Öffentlich erreichbar ist nur Nginx: `https://<domain>/api/v1/...` (TLS 1.2/1.3, HSTS). HTTP-Anfragen werden mit
+      `308` auf HTTPS umgeleitet – die App muss trotzdem immer `https://` verwenden, damit Tokens nie unverschlüsselt
+      übertragen werden. Der Node.js-Server selbst lauscht nur intern (127.0.0.1:3000 bzw. im Docker-Netz).
+    - Nginx reicht Methode, Pfad, Query, Body, Statuscode und alle Header (auch `Authorization`) unverändert durch und
+      setzt `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Real-IP` und `X-Request-ID`.
+    - Maximale Request-Größe 1 MiB (Nginx und Server): größere Anfragen erhalten `413 PAYLOAD_TOO_LARGE`.
+    - Ist der Server vorübergehend nicht erreichbar (Neustart, Update, Datenbankausfall), antwortet Nginx bzw. der
+      Server mit `503 SERVICE_UNAVAILABLE` und `Retry-After`. Die App sollte dann später erneut versuchen; Schreibvorgänge
+      mit `operationId` (Sync) können gefahrlos wiederholt werden.
+    - Nur unter `/api/` gibt es Inhalte; `/internal/` ist über Nginx nie erreichbar.
 servers:
+  - url: https://{domain}
+    description: Produktion hinter Nginx (HTTPS)
+    variables:
+      domain: { default: berichtly.example.de, description: Domain des eigenen Servers (BERICHTLY_DOMAIN) }
   - url: /
+    description: Gleicher Host (z. B. Swagger UI unter /api/docs)
 security:
   - bearerAuth: []
 tags:
@@ -69,6 +87,7 @@ paths:
       summary: Liveness – Prozess antwortet (ohne Datenbankprüfung)
       security: []
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/HealthEnvelope" } } } }
   /api/v1/health/ready:
     get:
@@ -87,6 +106,9 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RegisterRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "201": { description: Konto angelegt, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -104,6 +126,9 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Angemeldet, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -120,6 +145,9 @@ paths:
           application/json:
             schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string, example: "brt_..." } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Neues Token-Paar, content: { application/json: { schema: { $ref: "#/components/schemas/AuthEnvelope" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/ValidationError" }
@@ -129,6 +157,7 @@ paths:
       tags: [Auth]
       summary: Aktuelle Sitzung beenden (Access und Refresh Token sofort ungültig)
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "204": { description: Abgemeldet }
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/auth/logout-all:
@@ -136,6 +165,7 @@ paths:
       tags: [Auth]
       summary: Alle Sitzungen auf allen Geräten beenden (1.1)
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200":
           description: Abgemeldet
           content:
@@ -148,6 +178,7 @@ paths:
       tags: [Konto]
       summary: Eigenes Konto abrufen
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Konto, content: { application/json: { schema: { $ref: "#/components/schemas/AccountEnvelope" } } } }
     patch:
       tags: [Konto]
@@ -156,6 +187,9 @@ paths:
         required: true
         content: { application/json: { schema: { type: object, properties: { timezone: { type: string, example: Europe/Berlin, description: IANA-Zeitzone } } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Konto, content: { application/json: { schema: { $ref: "#/components/schemas/AccountEnvelope" } } } }
         "422": { $ref: "#/components/responses/ValidationError" }
   /api/v1/account/password:
@@ -174,6 +208,9 @@ paths:
                 currentPassword: { type: string }
                 newPassword: { type: string, minLength: 10, maxLength: 128 }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "204": { description: Geändert }
         "401": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/ValidationError" }
@@ -184,6 +221,7 @@ paths:
       summary: Eigene Sicherheitsereignisse (neueste zuerst, 1.1)
       parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Limit" }]
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200":
           description: Ereignisse
           content:
@@ -199,6 +237,7 @@ paths:
       summary: Aktive Sitzungen des Kontos (1.1)
       parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Limit" }]
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200":
           description: Sitzungen
           content:
@@ -214,6 +253,7 @@ paths:
       summary: Eine eigene Sitzung beenden (1.1)
       parameters: [{ $ref: "#/components/parameters/Id" }]
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "204": { description: Beendet }
         "404": { $ref: "#/components/responses/Error" }
 
@@ -222,12 +262,16 @@ paths:
       tags: [Profil]
       summary: Eigenes Profil abrufen
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Profil, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileEnvelope" } } } }
     put:
       tags: [Profil]
       summary: Eigenes Profil ersetzen (mit Basisversion)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Profil, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileEnvelope" } } } }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/ValidationError" }
@@ -250,6 +294,7 @@ paths:
         - { $ref: "#/components/parameters/Page" }
         - { $ref: "#/components/parameters/Limit" }
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200":
           description: Liste
           content:
@@ -268,6 +313,9 @@ paths:
         (idempotente Wiederholung), bei anderem Inhalt mit `409` (`ALREADY_EXISTS`).
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "201": { description: Erstellt, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
         "200": { description: Bereits identisch vorhanden, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -278,6 +326,7 @@ paths:
       tags: [Tagesberichte]
       summary: Tagesbericht abrufen
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Bericht, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
         "404": { $ref: "#/components/responses/Error" }
     put:
@@ -285,6 +334,9 @@ paths:
       summary: Tagesbericht ersetzen (Feld `version` = Basisversion, Pflicht)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Aktualisiert, content: { application/json: { schema: { $ref: "#/components/schemas/DailyReportEnvelope" } } } }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -294,6 +346,7 @@ paths:
       summary: Tagesbericht löschen (Soft-Delete/Tombstone, idempotent)
       parameters: [{ $ref: "#/components/parameters/Version" }]
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "204": { description: Gelöscht }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
@@ -315,6 +368,7 @@ paths:
         - { $ref: "#/components/parameters/Page" }
         - { $ref: "#/components/parameters/Limit" }
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200":
           description: Liste
           content:
@@ -329,6 +383,9 @@ paths:
       summary: Wochenbericht erstellen (ein aktiver Bericht pro Woche)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "201": { description: Erstellt, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
         "200": { description: Bereits identisch vorhanden, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -339,6 +396,7 @@ paths:
       tags: [Wochenberichte]
       summary: Wochenbericht abrufen
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Bericht, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
         "404": { $ref: "#/components/responses/Error" }
     put:
@@ -346,6 +404,9 @@ paths:
       summary: Wochenbericht ersetzen (Feld `version` Pflicht)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Aktualisiert, content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } } }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -355,6 +416,7 @@ paths:
       summary: Wochenbericht löschen (Soft-Delete/Tombstone)
       parameters: [{ $ref: "#/components/parameters/Version" }]
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "204": { description: Gelöscht }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -364,6 +426,7 @@ paths:
       tags: [Wochen]
       summary: Aktuelle Woche (Montag–Sonntag) in der Zeitzone des Benutzers
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
   /api/v1/weeks/{date}:
     get:
@@ -371,6 +434,7 @@ paths:
       summary: Woche (Montag–Sonntag), die das Datum enthält
       parameters: [{ name: date, in: path, required: true, schema: { type: string, format: date } }]
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
         "400": { $ref: "#/components/responses/Error" }
   /api/v1/weeks/{isoYear}/{isoWeek}:
@@ -381,6 +445,7 @@ paths:
         - { name: isoYear, in: path, required: true, schema: { type: integer } }
         - { name: isoWeek, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 53 } }
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Wochenübersicht, content: { application/json: { schema: { $ref: "#/components/schemas/WeekEnvelope" } } } }
         "400": { $ref: "#/components/responses/Error" }
 
@@ -394,6 +459,9 @@ paths:
         Bei `pull.hasMore = true` weitere Seiten über `GET /sync/changes` abrufen, zum Schluss `POST /sync/complete`.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SyncRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Ergebnis, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncResponse" } } } } } }
         "400": { $ref: "#/components/responses/Error" }
         "410": { $ref: "#/components/responses/CursorExpired" }
@@ -408,6 +476,9 @@ paths:
         `unresolvedConflicts > 0`). FAILED wird nie als Erfolg gespeichert.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SyncCompleteRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Neuer Gerätestatus, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncDeviceStatus" } } } } } }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/ValidationError" }
@@ -419,6 +490,7 @@ paths:
         - { name: cursor, in: query, schema: { type: string, default: "0" }, description: "`nextCursor` des letzten Abrufs; 0 = alles" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Änderungen, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncPullResponse" } } } } } }
         "400": { $ref: "#/components/responses/Error" }
         "410": { $ref: "#/components/responses/CursorExpired" }
@@ -428,6 +500,9 @@ paths:
       summary: Lokale Änderungen hochladen (max. 100 pro Anfrage, jede einzeln verarbeitet)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SyncPushRequest" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Ergebnis pro Änderung, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncPushResponse" } } } } } }
         "422": { $ref: "#/components/responses/ValidationError" }
   /api/v1/sync/status:
@@ -435,6 +510,7 @@ paths:
       tags: [Synchronisierung]
       summary: Synchronisationsstand (Server-Cursor, gültiger Mindest-Cursor, Gerätestatus)
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Status, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncStatus" } } } } } }
 
   /api/v1/devices:
@@ -444,6 +520,9 @@ paths:
       description: Idempotent über die stabile Geräte-ID. Ein abgemeldetes Gerät wird dadurch wieder aktiv.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceInfo" } } } }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "201": { description: Neu registriert, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
         "200": { description: Bereits bekannt, aktualisiert, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
         "422": { $ref: "#/components/responses/ValidationError" }
@@ -455,6 +534,7 @@ paths:
         - { $ref: "#/components/parameters/Page" }
         - { $ref: "#/components/parameters/Limit" }
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200":
           description: Geräte
           content:
@@ -470,6 +550,7 @@ paths:
       tags: [Geräte]
       summary: Eigenes Gerät abrufen (1.1)
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Gerät, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
         "404": { $ref: "#/components/responses/Error" }
     patch:
@@ -488,6 +569,9 @@ paths:
                 osVersion: { type: string, maxLength: 32 }
                 appVersion: { type: string, maxLength: 32 }
       responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Gerät, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceEnvelope" } } } }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/ValidationError" }
@@ -495,6 +579,7 @@ paths:
       tags: [Geräte]
       summary: Gerät abmelden (alle Sitzungen des Geräts widerrufen; Berichte bleiben erhalten)
       responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "204": { description: Abgemeldet }
         "404": { $ref: "#/components/responses/Error" }
 
@@ -521,6 +606,13 @@ components:
     RateLimited:
       description: Zu viele Anfragen (`RATE_LIMITED`) bzw. Konto vorübergehend gesperrt (`ACCOUNT_TEMPORARILY_LOCKED`)
       headers: { Retry-After: { schema: { type: integer }, description: Sekunden bis zum nächsten Versuch } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ServiceUnavailable:
+      description: Vorübergehend nicht verfügbar (`SERVICE_UNAVAILABLE`) – Neustart, Update oder Datenbank nicht erreichbar
+      headers: { Retry-After: { schema: { type: integer }, description: Sekunden bis zum nächsten Versuch } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    PayloadTooLarge:
+      description: Request-Body größer als 1 MiB (`PAYLOAD_TOO_LARGE`)
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     CursorExpired:
       description: Cursor älter als bereinigte Löschinformationen (`SYNC_CURSOR_EXPIRED`) – vollständig neu synchronisieren (cursor=0)
@@ -549,8 +641,8 @@ components:
               enum: [VALIDATION_FAILED, INVALID_REQUEST_BODY, INVALID_PARAMETER, UNAUTHORIZED, INVALID_CREDENTIALS,
                      INVALID_REFRESH_TOKEN, ACCOUNT_DISABLED, ACCOUNT_TEMPORARILY_LOCKED, REGISTRATION_DISABLED,
                      EMAIL_ALREADY_REGISTERED, NOT_FOUND, METHOD_NOT_ALLOWED, CONFLICT, PAYLOAD_TOO_LARGE,
-                     UNSUPPORTED_MEDIA_TYPE, RATE_LIMITED, INTERNAL_ERROR, SYNC_CURSOR_EXPIRED, DEVICE_REQUIRED,
-                     OPERATION_ID_REUSED]
+                     UNSUPPORTED_MEDIA_TYPE, RATE_LIMITED, INTERNAL_ERROR, SERVICE_UNAVAILABLE, SYNC_CURSOR_EXPIRED,
+                     DEVICE_REQUIRED, OPERATION_ID_REUSED]
             message: { type: string }
             requestId: { type: string }
             details:

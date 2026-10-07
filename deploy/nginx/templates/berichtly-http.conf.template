@@ -1,0 +1,30 @@
+# Berichtly Server 1.2 – Nginx NUR FÜR ENTWICKLUNG UND DIE ERSTEINRICHTUNG (ohne TLS).
+#
+# Ohne HTTPS werden Passwörter und Tokens unverschlüsselt übertragen. Diese Vorlage ist deshalb nur gedacht für
+#   - lokale Entwicklung und Tests (docker-compose.dev.yml, Tests über Nginx),
+#   - die erste Ausstellung des Let's-Encrypt-Zertifikats (Webroot unter /.well-known/acme-challenge/).
+# Danach immer berichtly-https.conf.template verwenden (NGINX_CONFIG=https, Standard).
+#
+# Vorlage: ${BERICHTLY_DOMAIN} und ${BERICHTLY_UPSTREAM} werden beim Einrichten ersetzt (siehe HTTPS-Vorlage).
+
+include /etc/nginx/snippets/berichtly-http-context.conf;
+
+upstream berichtly_upstream {
+    server ${BERICHTLY_UPSTREAM};
+    keepalive 32;
+    keepalive_timeout 60s;   # kürzer als der Keep-Alive-Timeout von Node.js (75 s)
+    keepalive_requests 1000;
+}
+
+server {
+    listen 80;
+    #IPV6 listen [::]:80;
+    server_name ${BERICHTLY_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+    }
+
+    include /etc/nginx/snippets/berichtly-api.conf;
+}

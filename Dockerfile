@@ -1,35 +1,37 @@
-# Berichtly Server 1.1 – Linux-Container-Image (mehrstufiger, reproduzierbarer Build).
-#   docker build --build-arg VERSION=1.1.0 -t berichtly-server:1.1.0 .
-# Start: siehe docker-compose.yml
+# Berichtly Server 1.2 – Container-Image (Node.js LTS).
+#   docker build -t berichtly-server:1.2.0 .
+# Start: siehe docker-compose.yml (Nginx davor, PostgreSQL im internen Netz).
+#
+# Node.js führt den TypeScript-Quellcode direkt aus (Type Stripping) – kein Build-Schritt, keine nativen Module.
 
-FROM golang:1.27-alpine AS build
-ARG VERSION=1.1.0
-WORKDIR /src
-# Abhängigkeiten zuerst (Layer-Cache); go.sum stellt identische Versionen sicher.
-COPY go.mod go.sum ./
-RUN go mod download && go mod verify
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false \
-    -ldflags "-s -w -X berichtly-server/internal/app.Version=${VERSION}" \
-    -o /out/berichtly-server ./cmd/berichtly-server
+FROM node:24-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+# Nur Laufzeitabhängigkeiten, exakt nach package-lock.json; keine Install-Skripte.
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
-# Minimales Laufzeit-Image: nur die statische Binärdatei – keine Shell, kein Paketmanager,
-# läuft als unprivilegierter Benutzer "nonroot" (UID 65532).
-FROM gcr.io/distroless/static-debian12:nonroot
-ARG VERSION=1.1.0
+FROM node:24-alpine
 LABEL org.opencontainers.image.title="Berichtly Server" \
-      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.version="1.2.0" \
       org.opencontainers.image.description="Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App"
-COPY --from=build /out/berichtly-server /usr/local/bin/berichtly-server
-USER nonroot:nonroot
-ENV APP_ENV=production \
+WORKDIR /app
+ENV NODE_ENV=production \
+    APP_ENV=production \
     SERVER_HOST=0.0.0.0 \
-    SERVER_PORT=8080 \
+    SERVER_PORT=3000 \
     LOG_FORMAT=json
-EXPOSE 8080
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
+COPY bin ./bin
+COPY src ./src
+COPY api ./api
+# Programmdateien gehören root; der Dienst läuft als unprivilegierter Benutzer "node" (UID 1000) und kann sie
+# nicht verändern.
+USER node
+EXPOSE 3000
 STOPSIGNAL SIGTERM
 # Readiness: Datenbank erreichbar und Schema aktuell.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD ["/usr/local/bin/berichtly-server", "healthcheck"]
-ENTRYPOINT ["/usr/local/bin/berichtly-server"]
+    CMD ["node", "src/cli.ts", "healthcheck"]
+ENTRYPOINT ["node", "src/cli.ts"]
 CMD ["serve"]

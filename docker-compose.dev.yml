@@ -1,0 +1,33 @@
+# Berichtly Server 1.2 – ENTWICKLUNG (nur zusammen mit docker-compose.yml, nie allein und nie in Produktion):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Unterschiede zur Produktion:
+# - Nginx ohne TLS auf http://127.0.0.1:${NGINX_HTTP_PORT:-8080} (Vorlage berichtly-http.conf.template).
+# - PostgreSQL zusätzlich auf 127.0.0.1:${DB_DEV_PORT:-5432} erreichbar (z. B. für psql oder Tests) – nur lokal.
+# - Entwicklungsmodus: lesbare Logs, API-Dokumentation unter /api/docs.
+#
+# Ohne diese Datei startet immer die Produktionskonfiguration (HTTPS, keine Datenbank-Ports).
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_DEV_PORT:-5432}:5432"
+    networks: [backend, devdb]   # veröffentlichte Ports benötigen ein nicht-internes Netz
+
+  server:
+    environment:
+      APP_ENV: development
+      LOG_FORMAT: text
+      API_DOCS_ENABLED: "true"
+
+  nginx:
+    environment:
+      BERICHTLY_DOMAIN: ${BERICHTLY_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/nginx/templates/berichtly-http.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports: !override
+      - "127.0.0.1:${NGINX_HTTP_PORT:-8080}:80"
+
+networks:
+  devdb: {}
