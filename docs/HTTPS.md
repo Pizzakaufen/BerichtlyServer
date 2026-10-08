@@ -1,4 +1,4 @@
-# HTTPS mit Nginx und Let's Encrypt – Berichtly Server 1.2
+# HTTPS mit Nginx – mit Domain (Let's Encrypt) oder ohne Domain (IP-Adresse) – Berichtly Server 1.2.1
 
 Nginx ist der **einzige öffentlich erreichbare Dienst**. Er beendet TLS, leitet HTTP auf HTTPS um und reicht nur
 `/api/` an den Node.js-Server weiter, der selbst nur intern lauscht (`127.0.0.1:3000` bzw. im Docker-Netz).
@@ -8,6 +8,7 @@ Dateien:
 | Datei | Zweck |
 |---|---|
 | `deploy/nginx/templates/berichtly-https.conf.template` | **Produktion**: Port 80 (nur ACME + Umleitung) und 443 (TLS 1.2/1.3, HSTS) |
+| `deploy/nginx/templates/berichtly-ip.conf.template` | **Ohne Domain**: HTTPS über die IP-Adresse mit eigenem Zertifikat (siehe unten) |
 | `deploy/nginx/templates/berichtly-http.conf.template` | **Nur Entwicklung und Ersteinrichtung** (kein TLS) |
 | `deploy/nginx/snippets/berichtly-http-context.conf` | Request-ID, HSTS-Zuordnung, Rate-Limit-Zonen, JSON-Zugriffslog |
 | `deploy/nginx/snippets/berichtly-api.conf` | Locations: `/api/`, strengeres Limit für Auth, `/internal/` → 404, Fehlerseiten im API-Format |
@@ -127,11 +128,53 @@ docker compose ps
 Die Erneuerung übernimmt danach `certbot.timer` auf dem Host (`sudo certbot renew --dry-run` zum Prüfen). Ohne
 Zertifikat startet der Nginx-Container mit der HTTPS-Vorlage bewusst nicht – es gibt keinen stillen Rückfall auf HTTP.
 
-## Server ohne Domain / nur im lokalen Netz
+## Betrieb ohne Domain (HTTPS über die IP-Adresse) – ab 1.2.1
 
-Let's Encrypt benötigt eine öffentlich auflösbare Domain. Für einen Server nur im Heimnetz kommen ein eigenes
-Zertifikat einer internen CA oder die DNS-Challenge in Frage; das ist nicht Teil dieser Vorlagen. Die HTTP-Vorlage
-ist kein Ersatz für HTTPS.
+Ohne Domain stellt Let's Encrypt kein Zertifikat aus. Berichtly Server verschlüsselt die Verbindung trotzdem mit
+HTTPS: Bei der Installation erzeugt der Server ein **eigenes Zertifikat für seine IP-Adresse**. Weil kein Browser
+und kein Android-Gerät diesem Zertifikat von sich aus vertraut, bekommt die App zusätzlich den **Fingerabdruck
+(Pin)** des Server-Schlüssels und akzeptiert dann nur genau diesen Server (Certificate Pinning). Das ist genauso
+sicher wie ein öffentliches Zertifikat – solange der Fingerabdruck auf einem vertrauenswürdigen Weg in die App
+kommt (vom eigenen Bildschirm abgelesen bzw. per QR-Code gescannt).
+
+| | |
+|---|---|
+| Einrichtung | automatisch durch `deploy/setup.sh` ohne Domain (bzw. `install-from-github.sh`) |
+| Schlüssel und Zertifikat | `/etc/berichtly-server/tls/server.key` (nur root) und `server.crt`; nie im Repository |
+| Erzeugt mit | `deploy/tls-selfsigned.sh <ip>`: EC P-256, 10 Jahre gültig, `subjectAltName=IP:<ip>` |
+| Nginx | Vorlage `berichtly-ip.conf.template` (TLS 1.2/1.3, HTTP→HTTPS, sonst wie mit Domain) |
+| Fingerabdruck anzeigen | `berichtly-server tls-pin` (Adresse, Pin, Ablaufdatum), `berichtly-server tls-pin --uri` (für QR-Code) |
+| Format des Pins | `sha256/<Base64>` = SHA-256 über den öffentlichen Schlüssel (SubjectPublicKeyInfo), wie bei OkHttp |
+| Verbindungsdaten | `berichtly://server?url=https%3A%2F%2F<ip>&pin=sha256%2F…` (Inhalt des QR-Codes) |
+
+**Der Fingerabdruck ändert sich nie von selbst.** `tls-selfsigned.sh` erzeugt den Schlüssel nur einmal. Ändert sich
+die IP-Adresse des Servers oder läuft das Zertifikat in weniger als 30 Tagen ab, wird es beim nächsten Aufruf von
+`setup.sh` mit **demselben Schlüssel** neu ausgestellt – der Pin in der App bleibt gültig. Nur wer
+`/etc/berichtly-server/tls/server.key` löscht oder ersetzt, erhält einen neuen Fingerabdruck; dann müssen alle
+Apps neu verbunden werden. Den Schlüssel deshalb zusammen mit der Konfiguration sichern ([BACKUP.md](BACKUP.md)).
+
+Hinweise:
+
+- **Browser** zeigen bei `https://<ip>` eine Zertifikatswarnung. Das ist bei einem eigenen Zertifikat normal und
+  betrifft die App nicht. Wer im Browser prüfen möchte, vergleicht den SHA-256-Fingerabdruck des Zertifikats mit der
+  Ausgabe von `berichtly-server tls-pin`.
+- **HSTS** wird mitgesendet, Browser ignorieren es bei IP-Adressen aber (so vorgesehen).
+- **Private Adresse** (z. B. `192.168.…` im Heimnetz): Die App erreicht den Server dann nur im selben Netz. Für den
+  Zugriff aus dem Internet die öffentliche IP angeben (`setup.sh <öffentliche-ip>`) und am Router die Ports 80 und
+  443 an den Server weiterleiten.
+- **Neue IP-Adresse** (z. B. Umzug zu einem anderen Server-Tarif): `setup.sh <neue-ip>` ausführen; in der App nur die
+  Adresse ändern, der Fingerabdruck bleibt gleich.
+- **Später doch eine Domain:** `setup.sh <domain> <e-mail>` stellt auf Let's Encrypt um; die App braucht dann keinen
+  Pin mehr.
+- **Docker Compose:** Zertifikat auf dem Host erzeugen (`sudo sh deploy/tls-selfsigned.sh <ip>`), in `.env`
+  `NGINX_CONFIG=ip` und `BERICHTLY_DOMAIN=<ip>` setzen, dann `docker compose up -d`. Der Nginx-Container bindet
+  `/etc/berichtly-server/tls` (`TLS_DIR`) nur lesend ein.
+
+Wie die Android-App das Pinning umsetzt: [API.md](API.md), Abschnitt "Verbindung ohne Domain".
+
+Getestet in `test/nginx/nginx.test.ts` (Betriebsart `ip`): Verbindung nur mit richtigem Pin, falscher Pin und
+Verbindungen ohne Pin (wie ein Browser) werden abgelehnt; dazu alle API-Prüfungen wie mit Domain.
+`test/unit/tls.test.ts` prüft, dass der Pin bei Verlängerung und neuer IP gleich bleibt.
 
 ## IPv6
 

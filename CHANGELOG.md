@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.1 – 2026-10-08
+
+Betrieb ohne Domain. API und Datenbank unverändert, keine Migration.
+
+- **HTTPS über die IP-Adresse:** Ohne Domain erzeugt die Installation ein eigenes Zertifikat für die IP
+  (`deploy/tls-selfsigned.sh`, EC P-256, 10 Jahre) und richtet Nginx mit der neuen Vorlage
+  `berichtly-ip.conf.template` ein. Die App vertraut dem Server über den Fingerabdruck des Schlüssels
+  (Certificate Pinning); bei Verlängerung oder neuer IP bleibt der Schlüssel und damit der Fingerabdruck gleich.
+- Neuer Befehl `berichtly-server tls-pin`: Adresse, Fingerabdruck und Ablaufdatum; `--uri` liefert die
+  Verbindungsdaten für die App (`berichtly://server?url=…&pin=…`), die Installation zeigt sie als QR-Code.
+- `install-from-github.sh` und `deploy/setup.sh` wählen ohne Angaben automatisch den Betrieb über die IP – keine
+  Rückfragen mehr. Eine gespeicherte Domain ohne Zertifikat wird dabei verworfen. Mit Domain wie bisher.
+- `scripts/install-on-server.ps1`: `-Domain`/`-Email` sind optional.
+- Docker Compose: `NGINX_CONFIG=ip` mit Zertifikat vom Host (`TLS_DIR`).
+- Doku: HTTPS.md (Betrieb ohne Domain), API.md (Pinning in der Android-App mit OkHttp), BACKUP.md (TLS-Schlüssel
+  sichern), OpenAPI (Server ohne Domain).
+- Tests: Nginx-Full-Stack-Tests zusätzlich in der Betriebsart `ip` (nur mit richtigem Pin, falscher Pin und
+  Verbindungen ohne Pin werden abgelehnt); Unit-Test für Pin-Stabilität und Verbindungsdaten.
+
 ## 1.2.0 – 2026-10-07
 
 Neue Laufzeit und neuer öffentlicher Zugang – gleiche API, gleiche Datenbank. Upgrade von 1.1 ohne Datenverlust;

@@ -3,9 +3,14 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Pizzakaufen/BerichtlyServer/main/install-from-github.sh | sh
 #
-# Fragt beim ersten Mal nach Domain und E-Mail (für Let's Encrypt) und merkt sich beides in
-# /etc/berichtly-server/install.conf. Ein erneuter Aufruf desselben Befehls aktualisiert den Server ohne Fragen.
-# Ohne Rückfragen:  ... | sh -s -- berichtly.example.de admin@example.de
+# Ohne weitere Angaben läuft der Server ohne Domain über die IP-Adresse (HTTPS mit eigenem Zertifikat; die App
+# bekommt Adresse und Fingerabdruck, auch als QR-Code). Es gibt keine Rückfragen.
+#
+#   ... | sh -s -- 203.0.113.10                         bestimmte IP-Adresse verwenden
+#   ... | sh -s -- berichtly.example.de admin@x.de      mit eigener Domain und Let's-Encrypt-Zertifikat
+#
+# Die Auswahl wird in /etc/berichtly-server/install.conf gespeichert; ein erneuter Aufruf desselben Befehls
+# aktualisiert den Server mit denselben Einstellungen.
 #
 # Privates Repository: Das Skript fragt nach einem GitHub-Token (Leserecht genügt) oder liest GITHUB_TOKEN. Der Token
 # wird nur für den Download verwendet und nirgends gespeichert.
@@ -22,19 +27,15 @@ main() {
     TOKEN="${GITHUB_TOKEN:-}"
 
     fail() { printf '\nFEHLER: %s\n' "$*" >&2; exit 1; }
-    ask() { # ask PROMPT [secret] – liest vom Terminal, auch wenn das Skript über eine Pipe kommt
-        [ -r /dev/tty ] || fail "Keine Eingabe möglich. Domain und E-Mail als Argumente übergeben: ... | sh -s -- <domain> <e-mail>"
+    ask_secret() { # liest vom Terminal, auch wenn das Skript über eine Pipe kommt
+        [ -r /dev/tty ] || fail "Keine Eingabe möglich. Token als GITHUB_TOKEN übergeben."
         printf '%s' "$1" > /dev/tty
-        if [ "${2:-}" = secret ]; then
-            stty -echo < /dev/tty
-            IFS= read -r ANSWER < /dev/tty || ANSWER=""
-            stty echo < /dev/tty
-            printf '\n' > /dev/tty
-        else
-            IFS= read -r ANSWER < /dev/tty || ANSWER=""
-        fi
+        stty -echo < /dev/tty
+        IFS= read -r ANSWER < /dev/tty || ANSWER=""
+        stty echo < /dev/tty
+        printf '\n' > /dev/tty
     }
-    saved() { [ -r "$STATE" ] && sed -n "s/^$1=//p" "$STATE" | tail -n 1 || true; }
+    saved() { if [ -r "$STATE" ]; then sed -n "s/^$1=//p" "$STATE" | tail -n 1; fi; }
     git_auth() { # git mit Token nur für diesen Aufruf (wird nicht in .git/config gespeichert)
         if [ -n "$TOKEN" ]; then
             git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')" "$@"
@@ -46,11 +47,17 @@ main() {
     [ "$(id -u)" -eq 0 ] || fail "Bitte als root ausführen (z. B. erst 'sudo -i')."
     command -v apt-get >/dev/null 2>&1 || fail "Nur für Debian/Ubuntu. Andere Systeme: docs/DEPLOYMENT.md im Repository."
 
-    DOMAIN="${1:-$(saved DOMAIN)}"
-    EMAIL="${2:-$(saved EMAIL)}"
-    if [ -z "$DOMAIN" ]; then ask "Domain des Servers (z. B. berichtly.example.de): "; DOMAIN="$ANSWER"; fi
-    if [ -z "$EMAIL" ]; then ask "E-Mail für das HTTPS-Zertifikat (Let's Encrypt): "; EMAIL="$ANSWER"; fi
-    [ -n "$DOMAIN" ] && [ -n "$EMAIL" ] || fail "Domain und E-Mail werden benötigt."
+    # Einstellungen: Argumente > gespeicherte Auswahl > Betrieb über die IP-Adresse.
+    TARGET="${1:-}"
+    EMAIL="${2:-}"
+    if [ -z "$TARGET" ]; then
+        TARGET="$(saved ADDRESS)"
+        EMAIL="$(saved EMAIL)"
+        OLD_DOMAIN="$(saved DOMAIN)"   # Format bis 1.2
+        if [ -z "$TARGET" ] && [ -n "$OLD_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$OLD_DOMAIN/fullchain.pem" ]; then
+            TARGET="$OLD_DOMAIN"   # Domain mit vorhandenem Zertifikat weiter verwenden
+        fi
+    fi
 
     echo "==> Git installieren"
     apt-get update -q < /dev/null
@@ -58,7 +65,7 @@ main() {
 
     # Öffentlich oder privat? Ohne Token prüfen, ob das Repository ohne Anmeldung lesbar ist.
     if [ -z "$TOKEN" ] && ! GIT_TERMINAL_PROMPT=0 git ls-remote "$REPO_URL" >/dev/null 2>&1; then
-        ask "GitHub-Token (Repository ist privat; Eingabe wird nicht angezeigt): " secret
+        ask_secret "GitHub-Token (Repository ist privat; Eingabe wird nicht angezeigt): "
         TOKEN="$ANSWER"
         [ -n "$TOKEN" ] || fail "Ohne Token kann das private Repository nicht geladen werden."
     fi
@@ -75,12 +82,16 @@ main() {
     fi
     echo "Version: $(cat "$SRC/VERSION")"
 
-    # Domain und E-Mail für spätere Updates merken (kein Token, keine Passwörter).
+    # Auswahl für spätere Updates merken (kein Token, keine Passwörter). Leere Adresse = IP automatisch erkennen.
     mkdir -p /etc/berichtly-server
-    printf 'DOMAIN=%s\nEMAIL=%s\n' "$DOMAIN" "$EMAIL" > "$STATE"
+    printf 'ADDRESS=%s\nEMAIL=%s\n' "$TARGET" "$EMAIL" > "$STATE"
     chmod 0600 "$STATE"
 
-    sh "$SRC/deploy/setup.sh" "$DOMAIN" "$EMAIL" < /dev/null
+    if [ -n "$TARGET" ]; then
+        sh "$SRC/deploy/setup.sh" "$TARGET" "$EMAIL" < /dev/null
+    else
+        sh "$SRC/deploy/setup.sh" < /dev/null
+    fi
 }
 
 main "$@"

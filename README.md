@@ -1,10 +1,11 @@
-# Berichtly Server 1.2
+# Berichtly Server 1.2.1
 
 Berichtly Server ist das eigenständige **Linux-Backend** für die Berichtly-Android-App. Er verwaltet
 Benutzerkonten, Geräte, Profile, Tages- und Wochenberichte und stellt eine versionierte REST-API sowie ein
 vollständiges Synchronisationsprotokoll für mehrere Android-Geräte pro Konto bereit.
 
-> **Status: 1.2.** Der Server läuft jetzt auf **Node.js LTS** hinter **Nginx** als einzigem öffentlichen Zugang
+> **Status: 1.2.1.** Neu: Betrieb **ohne Domain** über die IP-Adresse (HTTPS mit eigenem Zertifikat und
+> Fingerabdruck für die App). Seit 1.2 läuft der Server auf **Node.js LTS** hinter **Nginx** als einzigem öffentlichen Zugang
 > (HTTPS, TLS 1.2/1.3, HSTS, Rate Limiting). API, Datenbank und Verhalten sind identisch mit 1.1 – bestehende
 > Installationen werden ohne Datenverlust aktualisiert, angemeldete Apps bleiben angemeldet
 > ([docs/UPGRADE.md](docs/UPGRADE.md)). Die Android-App (Berichtly 2.2) funktioniert weiterhin ohne Server; ein
@@ -56,15 +57,29 @@ Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Installation in einem Schritt (empfohlen)
 
-Voraussetzungen: ein Debian-/Ubuntu-Server und eine Domain, deren DNS-Eintrag auf den Server zeigt.
+Voraussetzung: ein Debian- oder Ubuntu-Server (z. B. ein gemieteter VPS). **Eine Domain ist nicht nötig.**
 
-Auf dem Server als root diesen einen Befehl ausführen – er fragt nach Domain und E-Mail und richtet alles ein:
+Auf dem Server als root diesen einen Befehl ausführen – es gibt keine Rückfragen:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Pizzakaufen/BerichtlyServer/main/install-from-github.sh | sh
 ```
 
-**Update:** denselben Befehl erneut ausführen (ohne Rückfragen; Daten, Passwörter und Zertifikate bleiben erhalten).
+Am Ende zeigt die Installation die **Adresse** (`https://<IP-Adresse>`) und den **Fingerabdruck** des Servers an,
+zusätzlich als QR-Code. Beides trägt man in der App ein (bzw. scannt den QR-Code). Die Verbindung ist mit HTTPS
+verschlüsselt; die App akzeptiert nur genau diesen Server (Certificate Pinning, siehe [docs/HTTPS.md](docs/HTTPS.md)).
+Später erneut anzeigen: `berichtly-server tls-pin`.
+
+**Update:** denselben Befehl erneut ausführen. Daten, Passwörter, Schlüssel und der Fingerabdruck bleiben erhalten.
+
+Varianten:
+
+```bash
+# bestimmte IP-Adresse verwenden (z. B. wenn der Server mehrere hat)
+curl -fsSL https://raw.githubusercontent.com/Pizzakaufen/BerichtlyServer/main/install-from-github.sh | sh -s -- 203.0.113.10
+# mit eigener Domain und Let's-Encrypt-Zertifikat (DNS-Eintrag muss auf den Server zeigen)
+curl -fsSL https://raw.githubusercontent.com/Pizzakaufen/BerichtlyServer/main/install-from-github.sh | sh -s -- berichtly.example.de admin@example.de
+```
 
 Ist das Repository privat, funktioniert der Download über `raw.githubusercontent.com` nur mit Token. Dann zuerst den
 Token in eine Variable lesen (erscheint so nicht im Verlauf) und mitgeben:
@@ -77,19 +92,15 @@ curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubuserconten
 Von Windows aus mit dem selbst gebauten Paket (`dist/`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-on-server.ps1 -Server <SERVER-IP> -Domain berichtly.example.de -Email admin@example.de
+powershell -ExecutionPolicy Bypass -File scripts\install-on-server.ps1 -Server <SERVER-IP>
 ```
 
-Oder direkt auf dem Server im entpackten Paket:
+Oder direkt auf dem Server im entpackten Paket: `sudo sh deploy/setup.sh` (ohne Domain) bzw.
+`sudo sh deploy/setup.sh <domain> <e-mail>`.
 
-```bash
-sudo sh deploy/setup.sh berichtly.example.de admin@example.de
-```
-
-`deploy/setup.sh` installiert Node.js 24, PostgreSQL, Nginx und Certbot, legt die Datenbank an, erzeugt zufällige
-Passwörter und Schlüssel (nur in `/etc/berichtly-server/berichtly-server.env`), startet den Dienst, öffnet die
-Firewall (ufw), holt das Let's-Encrypt-Zertifikat und aktiviert HTTPS. Es kann für Updates oder nach einem Fehler
-einfach erneut ausgeführt werden; Daten, Passwörter und Zertifikate bleiben erhalten.
+`deploy/setup.sh` installiert Node.js 24, PostgreSQL und Nginx, legt die Datenbank an, erzeugt zufällige Passwörter
+und Schlüssel (nur in `/etc/berichtly-server/`), startet den Dienst, öffnet die Firewall (ufw) und aktiviert HTTPS –
+ohne Domain mit eigenem Zertifikat für die IP-Adresse, mit Domain über Let's Encrypt.
 
 ## Schritt für Schritt: Linux-Server (systemd)
 
@@ -97,7 +108,7 @@ Voraussetzungen: Debian 12 / Ubuntu 24.04 o. ä. mit systemd, Node.js 24 LTS, Po
 DNS-Eintrag auf den Server. Ausführlich: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), HTTPS: [docs/HTTPS.md](docs/HTTPS.md).
 
 ```bash
-tar xzf berichtly-server-1.2.0.tar.gz && cd berichtly-server-1.2.0
+tar xzf berichtly-server-<version>.tar.gz && cd berichtly-server-<version>
 
 # PostgreSQL (nur localhost)
 sudo -u postgres psql -c "CREATE ROLE berichtly LOGIN PASSWORD 'HIER-EIN-STARKES-PASSWORT';"
@@ -163,6 +174,7 @@ berichtly-server [--env-file <pfad>] <befehl>        # bzw. node src/cli.ts …
 | `healthcheck` | Readiness des laufenden Servers (Exit-Code 0 = bereit) – für Docker, Monitoring, Skripte |
 | `maintenance` | Wartung sofort ausführen (Aufbewahrungsfristen anwenden) |
 | `reset-sync-cursors` | Nach dem Einspielen eines Backups: alle Geräte einmal vollständig neu synchronisieren lassen |
+| `tls-pin` | Adresse und Fingerabdruck (Pin) für die App anzeigen, `--uri` für den QR-Code (Betrieb ohne Domain) |
 | `seed-dev` | Entwicklungskonto mit gekennzeichneten Beispieldaten – **nur** bei `APP_ENV=development` |
 | `version`, `help` | Version bzw. Hilfe |
 

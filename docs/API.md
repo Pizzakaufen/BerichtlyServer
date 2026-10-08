@@ -15,11 +15,58 @@ Anfragen; die App sollte unbekannte Felder in Antworten ebenfalls ignorieren (`i
 
 ## Basis-URL und Transport
 
-Die App spricht ausschließlich `https://<domain>/api/v1/...` an (Nginx, TLS 1.2/1.3). HTTP wird mit `308` auf HTTPS
+Die App spricht ausschließlich `https://<domain>/api/v1/...` bzw. ohne Domain `https://<ip-adresse>/api/v1/...` an
+(Nginx, TLS 1.2/1.3; ohne Domain mit Pin, siehe unten). HTTP wird mit `308` auf HTTPS
 umgeleitet, die App sollte aber nie HTTP verwenden (Android blockiert Klartext ohnehin standardmäßig). Bei
 `503 SERVICE_UNAVAILABLE` (Neustart, Update, Datenbank nicht erreichbar) später erneut versuchen und `Retry-After`
 beachten; Sync-Operationen mit `operationId` dürfen gefahrlos wiederholt werden. Eine eigene `X-Request-ID` der App
 (8–64 Zeichen `[A-Za-z0-9_-]`) wird von Nginx und Server übernommen und erleichtert die Fehlersuche.
+
+## Verbindung ohne Domain (Certificate Pinning) – ab 1.2.1
+
+Läuft der Server ohne Domain, hat er ein eigenes Zertifikat für seine IP-Adresse. Die App erhält bei der Einrichtung
+zwei Angaben – abgelesen aus der Installationsausgabe bzw. `berichtly-server tls-pin`, oder als QR-Code:
+
+```
+berichtly://server?url=https%3A%2F%2F203.0.113.10&pin=sha256%2Fq7Rk…%3D
+```
+
+- `url`: Basis-URL, z. B. `https://203.0.113.10` (API unter `/api/v1/...`)
+- `pin`: `sha256/<Base64>` – SHA-256 über den öffentlichen Schlüssel des Servers (SubjectPublicKeyInfo)
+
+Ist ein Pin hinterlegt, vertraut die App **ausschließlich** einem Zertifikat mit genau diesem öffentlichen Schlüssel.
+Die Prüfung der System-CAs entfällt dafür, die Hostnamen-/IP-Prüfung bleibt (das Zertifikat enthält die IP als
+`subjectAltName`). `CertificatePinner` von OkHttp allein genügt nicht, weil OkHttp vorher die Kette gegen die
+System-CAs prüft und das eigene Zertifikat dort scheitert. Beispiel (Kotlin, OkHttp):
+
+```kotlin
+fun pinnedClient(pin: String): OkHttpClient {          // pin = "sha256/…"
+    val expected = pin.removePrefix("sha256/")
+    val trustManager = object : X509TrustManager {
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+            val leaf = chain.firstOrNull() ?: throw CertificateException("Kein Zertifikat")
+            leaf.checkValidity()
+            val spkiHash = MessageDigest.getInstance("SHA-256").digest(leaf.publicKey.encoded)
+            if (Base64.encodeToString(spkiHash, Base64.NO_WRAP) != expected) {
+                throw CertificateException("Fingerabdruck des Servers stimmt nicht")
+            }
+        }
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) =
+            throw CertificateException("nicht unterstützt")
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+    val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustManager), null) }
+    return OkHttpClient.Builder()
+        .sslSocketFactory(ssl.socketFactory, trustManager)
+        .connectionSpecs(listOf(ConnectionSpec.RESTRICTED_TLS))   // nur TLS 1.2/1.3
+        .build()                                                  // Standard-HostnameVerifier prüft die IP
+}
+```
+
+`publicKey.encoded` liefert genau die SubjectPublicKeyInfo-Bytes, über die der Server den Pin berechnet. Ohne Pin
+(Server mit Domain und Let's-Encrypt-Zertifikat) verwendet die App den normalen OkHttp-Client. Pin und URL gehören
+in den verschlüsselten Speicher der App; ein falscher oder geänderter Pin muss als Fehler angezeigt werden
+("Server-Fingerabdruck stimmt nicht – Verbindung abgebrochen") und darf nie still akzeptiert werden.
 
 ## Antwortformat
 

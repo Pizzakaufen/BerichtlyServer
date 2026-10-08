@@ -1,4 +1,7 @@
-# Installation und Betrieb unter Linux – Berichtly Server 1.2
+# Installation und Betrieb unter Linux – Berichtly Server 1.2.1
+
+> Am einfachsten: Installation in einem Schritt, auch ohne Domain – siehe README, Abschnitt "Installation in einem
+> Schritt". Diese Seite beschreibt die einzelnen Schritte.
 
 Zielumgebung: Debian 12 / Ubuntu 24.04 oder vergleichbar, x86_64 oder arm64, mit systemd, ohne grafische
 Oberfläche. Alles wird über die Kommandozeile erledigt.

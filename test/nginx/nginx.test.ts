@@ -3,12 +3,15 @@
 // Voraussetzungen:
 //   BERICHTLY_TEST_DATABASE_URL  Testdatenbank (siehe test/helpers.ts)
 //   NGINX_BIN                    Nginx-Binary (Linux: meist "nginx"; ohne Angabe wird der Test übersprungen)
-//   OPENSSL_BIN                  optional, für den HTTPS-Teil (Standard: "openssl" aus PATH)
+//   OPENSSL_BIN                  optional, für den HTTPS-Teil mit Domain (Standard: "openssl" aus PATH)
+//
+// Betriebsarten: "http" (Entwicklung), "https" (Domain, Zertifikat wie von Let's Encrypt) und "ip" (ohne Domain,
+// eigenes Zertifikat aus deploy/tls-selfsigned.sh, Vertrauen über den Pin wie in der App).
 //
 // Die Vorlagen werden unverändert verwendet; nur absolute Pfade (/etc/nginx/snippets, /etc/letsencrypt,
-// /var/log/nginx, /var/www/certbot) und die Ports werden für die Testumgebung auf ein temporäres Verzeichnis
-// umgeschrieben. Das TLS-Zertifikat für den HTTPS-Teil wird zur Laufzeit selbst signiert erzeugt und danach
-// gelöscht – es liegt nie im Repository.
+// /etc/berichtly-server/tls, /var/log/nginx, /var/www/certbot) und die Ports werden für die Testumgebung auf ein
+// temporäres Verzeichnis umgeschrieben. Testzertifikate werden zur Laufzeit erzeugt und danach gelöscht – sie liegen
+// nie im Repository.
 
 import assert from 'node:assert/strict';
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
@@ -20,6 +23,9 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
+import { fileURLToPath } from 'node:url';
+import { tlsInfo } from '../../src/security/tls.ts';
 import { type Env, newEnv, uuid } from '../helpers.ts';
 
 const NGINX = process.env.NGINX_BIN ?? '';
@@ -27,8 +33,10 @@ const OPENSSL = process.env.OPENSSL_BIN ?? 'openssl';
 const skip = !process.env.BERICHTLY_TEST_DATABASE_URL ? 'BERICHTLY_TEST_DATABASE_URL nicht gesetzt'
   : !NGINX ? 'NGINX_BIN nicht gesetzt' : false;
 
+type Mode = 'http' | 'https' | 'ip';
 const REPO = new URL('../../', import.meta.url);
-const DOMAIN = 'localhost';
+const hostFor = (mode: Mode) => (mode === 'ip' ? '127.0.0.1' : 'localhost');
+const schemeFor = (mode: Mode): 'http' | 'https' => (mode === 'http' ? 'http' : 'https');
 const slash = (p: string) => p.replaceAll('\\', '/');
 
 async function freePort(): Promise<number> {
@@ -49,48 +57,71 @@ interface Reply {
   body: any;
 }
 
+/**
+ * Verbindungsprüfung wie in der App beim Betrieb ohne Domain: Zertifikat muss zur IP passen UND der Pin des
+ * öffentlichen Schlüssels muss stimmen.
+ */
+const pinCheck = (pin: string) => (host: string, cert: PeerCertificate): Error | undefined => {
+  const err = checkServerIdentity(host, cert);
+  if (err) return err;
+  return tlsInfo(cert.raw).pin === pin ? undefined : new Error('Pin stimmt nicht');
+};
+
 class Nginx {
   readonly dir: string;
+  readonly host: string;
   readonly httpPort: number;
   readonly httpsPort: number;
   readonly ca: Buffer | null;
+  readonly pin: string | null;
   private proc: ChildProcess | null = null;
 
-  private constructor(dir: string, httpPort: number, httpsPort: number, ca: Buffer | null) {
+  private constructor(dir: string, host: string, httpPort: number, httpsPort: number, ca: Buffer | null, pin: string | null) {
     this.dir = dir;
+    this.host = host;
     this.httpPort = httpPort;
     this.httpsPort = httpsPort;
     this.ca = ca;
+    this.pin = pin;
   }
 
   /** Rendert die Vorlage wie install-nginx.sh bzw. das Docker-Image (envsubst nur für die beiden Variablen). */
-  static async start(mode: 'http' | 'https', upstream: string): Promise<Nginx> {
+  static async start(mode: Mode, upstream: string): Promise<Nginx> {
+    const host = hostFor(mode);
     const dir = slash(mkdtempSync(join(tmpdir(), 'berichtly-nginx-')));
     for (const d of ['conf', 'logs', 'temp', 'snippets', 'www', 'certs']) mkdirSync(join(dir, d));
     const httpPort = await freePort();
     const httpsPort = await freePort();
     const local = (text: string) => text
       .replaceAll('/etc/nginx/snippets/', `${dir}/snippets/`)
-      .replaceAll(`/etc/letsencrypt/live/${DOMAIN}/`, `${dir}/certs/`)
+      .replaceAll(`/etc/letsencrypt/live/${host}/`, `${dir}/certs/`)
+      .replaceAll('/etc/berichtly-server/tls/', `${dir}/certs/`)
       .replaceAll('/var/log/nginx/', `${dir}/logs/`)
       .replaceAll('/var/www/certbot', `${dir}/www`);
     for (const name of ['berichtly-http-context.conf', 'berichtly-api.conf', 'berichtly-proxy.conf']) {
       writeFileSync(join(dir, 'snippets', name), local(readFileSync(new URL(`deploy/nginx/snippets/${name}`, REPO), 'utf8')));
     }
     const template = readFileSync(new URL(`deploy/nginx/templates/berichtly-${mode}.conf.template`, REPO), 'utf8');
-    const site = local(template.replaceAll('${BERICHTLY_DOMAIN}', DOMAIN).replaceAll('${BERICHTLY_UPSTREAM}', upstream))
+    const site = local(template.replaceAll('${BERICHTLY_DOMAIN}', host).replaceAll('${BERICHTLY_UPSTREAM}', upstream))
       .replace(/listen 80;/g, `listen 127.0.0.1:${httpPort};`)
-      .replace(/listen 443 ssl;/g, `listen 127.0.0.1:${httpsPort} ssl;`)
-      .replace(`return 308 https://${DOMAIN}$request_uri;`, `return 308 https://${DOMAIN}:${httpsPort}$request_uri;`);
+      .replace(/listen 443 ssl( default_server)?;/g, `listen 127.0.0.1:${httpsPort} ssl$1;`)
+      .replace(`return 308 https://${host}$request_uri;`, `return 308 https://${host}:${httpsPort}$request_uri;`);
     assert.ok(!site.includes('${'), 'nicht ersetzte Vorlagenvariable');
     writeFileSync(join(dir, 'conf', 'berichtly.conf'), site);
 
     let ca: Buffer | null = null;
+    let pin: string | null = null;
     if (mode === 'https') {
       execFileSync(OPENSSL, ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '1',
-        '-subj', `/CN=${DOMAIN}`, '-addext', `subjectAltName=DNS:${DOMAIN}`,
+        '-subj', `/CN=${host}`, '-addext', `subjectAltName=DNS:${host}`,
         '-keyout', join(dir, 'certs', 'privkey.pem'), '-out', join(dir, 'certs', 'fullchain.pem')], { stdio: 'ignore' });
       ca = readFileSync(join(dir, 'certs', 'fullchain.pem'));
+    } else if (mode === 'ip') {
+      // Das ausgelieferte Skript erzeugt Schlüssel und Zertifikat (wie bei der Installation).
+      execFileSync('sh', [fileURLToPath(new URL('deploy/tls-selfsigned.sh', REPO)), host, `${dir}/certs`],
+        { stdio: 'ignore', env: { ...process.env, MSYS2_ARG_CONV_EXCL: '*' } });
+      ca = readFileSync(join(dir, 'certs', 'server.crt'));
+      pin = tlsInfo(ca).pin;
     }
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `
 worker_processes 1;
@@ -111,11 +142,11 @@ http {
     const args = ['-p', `${dir}/`, '-c', `${dir}/conf/nginx.conf`];
     // Syntaxprüfung der ausgelieferten Konfiguration (wie install-nginx.sh).
     execFileSync(NGINX, [...args, '-t'], { stdio: 'pipe' });
-    const n = new Nginx(dir, httpPort, httpsPort, ca);
+    const n = new Nginx(dir, host, httpPort, httpsPort, ca, pin);
     n.proc = spawn(NGINX, args, { stdio: 'ignore' });
     for (let i = 0; i < 50; i++) {
       try {
-        await n.request('http', 'GET', '/nginx-bereit'); // beantwortet Nginx selbst (404), ohne Node.js zu belasten
+        await n.request('http', 'GET', '/nginx-bereit'); // beantwortet Nginx selbst, ohne Node.js zu belasten
         return n;
       } catch {
         await new Promise((r) => setTimeout(r, 100));
@@ -124,8 +155,17 @@ http {
     throw new Error('Nginx ist nicht gestartet: ' + readFileSync(join(dir, 'logs', 'error.log'), 'utf8'));
   }
 
+  /** TLS-Optionen wie in der App: bei IP-Betrieb ohne SNI, mit Pin-Prüfung. */
+  tlsOptions(pin = this.pin) {
+    return {
+      ca: this.ca ?? undefined,
+      servername: this.pin ? undefined : this.host,
+      ...(pin ? { checkServerIdentity: pinCheck(pin) } : {}),
+    };
+  }
+
   request(scheme: 'http' | 'https', method: string, path: string, o: { token?: string; body?: unknown;
-    headers?: Record<string, string> } = {}): Promise<Reply> {
+    headers?: Record<string, string>; pin?: string } = {}): Promise<Reply> {
     const headers: Record<string, string> = { ...o.headers };
     let payload: Buffer | undefined;
     if (o.body !== undefined) {
@@ -138,8 +178,8 @@ http {
     const port = scheme === 'https' ? this.httpsPort : this.httpPort;
     return new Promise((resolve, reject) => {
       const req = lib.request({
-        host: '127.0.0.1', port, method, path, headers: { Host: DOMAIN, ...headers }, servername: DOMAIN,
-        ca: this.ca ?? undefined, agent: false,
+        host: '127.0.0.1', port, method, path, headers: { Host: this.host, ...headers }, agent: false,
+        ...(scheme === 'https' ? this.tlsOptions(o.pin ?? this.pin) : {}),
       }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
@@ -170,18 +210,19 @@ http {
         this.proc!.once('exit', () => { clearTimeout(t); r(null); });
       });
     }
-    rmSync(this.dir, { recursive: true, force: true }); // inkl. des Testzertifikats
+    rmSync(this.dir, { recursive: true, force: true }); // inkl. der Testzertifikate
   }
 }
 
 const expectStatus = (r: Reply, status: number) => assert.equal(r.status, status, `HTTP ${status} erwartet, ${r.status}: ${r.raw}`);
 
-for (const mode of ['http', 'https'] as const) {
+for (const mode of ['http', 'https', 'ip'] as const) {
+  const scheme = schemeFor(mode);
   describe(`API über Nginx (${mode})`, { skip }, () => {
     let env: Env;
     let nginx: Nginx;
     const logs: string[] = [];
-    const call = (method: string, path: string, o: Parameters<Nginx['request']>[3] = {}) => nginx.request(mode, method, path, o);
+    const call = (method: string, path: string, o: Parameters<Nginx['request']>[3] = {}) => nginx.request(scheme, method, path, o);
 
     before(async () => {
       env = await newEnv({ shared: true, logLines: logs, overrides: { TRUST_PROXY: 'true', RATE_LIMIT_API_PER_MINUTE: '100000' } });
@@ -200,7 +241,7 @@ for (const mode of ['http', 'https'] as const) {
       assert.equal(r.headers['x-content-type-options'], 'nosniff');
       assert.equal(r.headers['cache-control'], 'no-store');
       assert.equal(r.headers.server, 'nginx'); // ohne Versionsnummer (server_tokens off)
-      if (mode === 'https') {
+      if (scheme === 'https') {
         assert.equal(r.headers['strict-transport-security'], 'max-age=31536000'); // genau einmal, von Nginx
       } else {
         assert.equal(r.headers['strict-transport-security'], undefined);
@@ -271,7 +312,7 @@ for (const mode of ['http', 'https'] as const) {
       await call('GET', '/api/v1/health/ready');
       const line = logs.map((l) => JSON.parse(l)).find((l) => l.msg === 'request' && l.path === '/api/v1/health/ready');
       assert.ok(line, 'Request-Log fehlt');
-      assert.equal(line.proto, mode); // Node.js kennt das Protokoll zwischen App und Nginx
+      assert.equal(line.proto, scheme); // Node.js kennt das Protokoll zwischen App und Nginx
     });
 
     test('Client kann seine IP nicht fälschen (Rate Limit pro echter Adresse)', async () => {
@@ -279,9 +320,9 @@ for (const mode of ['http', 'https'] as const) {
       const n = await Nginx.start(mode, new URL(own.base).host);
       try {
         for (let i = 0; i < 3; i++) {
-          expectStatus(await n.request(mode, 'GET', '/api/v1/health/live', { headers: { 'X-Forwarded-For': `203.0.113.${i}` } }), 200);
+          expectStatus(await n.request(scheme, 'GET', '/api/v1/health/live', { headers: { 'X-Forwarded-For': `203.0.113.${i}` } }), 200);
         }
-        const limited = await n.request(mode, 'GET', '/api/v1/health/live', { headers: { 'X-Forwarded-For': '203.0.113.99' } });
+        const limited = await n.request(scheme, 'GET', '/api/v1/health/live', { headers: { 'X-Forwarded-For': '203.0.113.99' } });
         expectStatus(limited, 429); // trotz wechselnder gefälschter Adressen: Node.js zählt die echte Client-IP
         assert.equal(limited.body.error.code, 'RATE_LIMITED');
         assert.ok(limited.headers['retry-after']);
@@ -305,29 +346,46 @@ for (const mode of ['http', 'https'] as const) {
       assert.ok(!nginx.accessLog().includes('Bearer'), 'Token im Zugriffslog');
     });
 
-    if (mode === 'https') {
+    if (scheme === 'https') {
       test('HTTP wird auf HTTPS umgeleitet (Methode bleibt erhalten)', async () => {
         const r = await nginx.request('http', 'POST', '/api/v1/auth/login?x=1', { body: { email: 'a@example.org', password: 'x' } });
         expectStatus(r, 308);
-        assert.equal(r.headers.location, `https://${DOMAIN}:${nginx.httpsPort}/api/v1/auth/login?x=1`);
-        const acme = await nginx.request('http', 'GET', '/.well-known/acme-challenge/nicht-vorhanden');
-        expectStatus(acme, 404); // Webroot für Let's Encrypt wird über HTTP ausgeliefert, nicht umgeleitet
+        assert.equal(r.headers.location, `https://${nginx.host}:${nginx.httpsPort}/api/v1/auth/login?x=1`);
+        if (mode === 'https') {
+          const acme = await nginx.request('http', 'GET', '/.well-known/acme-challenge/nicht-vorhanden');
+          expectStatus(acme, 404); // Webroot für Let's Encrypt wird über HTTP ausgeliefert, nicht umgeleitet
+        }
       });
 
       test('nur TLS 1.2 und 1.3', async () => {
         await assert.rejects(new Promise((resolve, reject) => {
-          const req = https.request({ host: '127.0.0.1', port: nginx.httpsPort, path: '/api/v1/health', servername: DOMAIN,
-            ca: nginx.ca!, maxVersion: 'TLSv1.1', minVersion: 'TLSv1', agent: false }, resolve);
+          const req = https.request({ host: '127.0.0.1', port: nginx.httpsPort, path: '/api/v1/health', ...nginx.tlsOptions(),
+            maxVersion: 'TLSv1.1', minVersion: 'TLSv1', agent: false }, resolve);
           req.on('error', reject);
           req.end();
         }));
         const tls12 = await new Promise<number>((resolve, reject) => {
-          const req = https.request({ host: '127.0.0.1', port: nginx.httpsPort, path: '/api/v1/health/live', servername: DOMAIN,
-            headers: { Host: DOMAIN }, ca: nginx.ca!, maxVersion: 'TLSv1.2', agent: false }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+          const req = https.request({ host: '127.0.0.1', port: nginx.httpsPort, path: '/api/v1/health/live', ...nginx.tlsOptions(),
+            headers: { Host: nginx.host }, maxVersion: 'TLSv1.2', agent: false }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
           req.on('error', reject);
           req.end();
         });
         assert.equal(tls12, 200);
+      });
+    }
+
+    if (mode === 'ip') {
+      test('ohne Domain: Vertrauen nur über den Pin, falscher Pin wird abgelehnt', async () => {
+        assert.match(nginx.pin!, /^sha256\/[A-Za-z0-9+/]{43}=$/);
+        // Mit richtigem Pin (oben in allen Tests verwendet) klappt die Verbindung, mit fremdem nicht.
+        const wrongPin = 'sha256/' + Buffer.alloc(32, 7).toString('base64');
+        await assert.rejects(nginx.request('https', 'GET', '/api/v1/health/live', { pin: wrongPin }), /Pin stimmt nicht/);
+        // Ohne eigenes Vertrauen (wie ein Browser) wird das eigene Zertifikat nicht akzeptiert.
+        await assert.rejects(new Promise((resolve, reject) => {
+          const req = https.request({ host: '127.0.0.1', port: nginx.httpsPort, path: '/api/v1/health/live', agent: false }, resolve);
+          req.on('error', reject);
+          req.end();
+        }));
       });
     }
   });

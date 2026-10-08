@@ -1,5 +1,5 @@
 # Berichtly Server 1.2 – Container-Image (Node.js LTS).
-#   docker build -t berichtly-server:1.2.0 .
+#   docker build -t berichtly-server:1.2.1 .
 # Start: siehe docker-compose.yml (Nginx davor, PostgreSQL im internen Netz).
 #
 # Node.js führt den TypeScript-Quellcode direkt aus (Type Stripping) – kein Build-Schritt, keine nativen Module.
@@ -12,7 +12,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 FROM node:24-alpine
 LABEL org.opencontainers.image.title="Berichtly Server" \
-      org.opencontainers.image.version="1.2.0" \
+      org.opencontainers.image.version="1.2.1" \
       org.opencontainers.image.description="Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App"
 WORKDIR /app
 ENV NODE_ENV=production \

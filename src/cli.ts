@@ -5,6 +5,7 @@ import { App, VERSION } from './app.ts';
 import { type Config, ConfigError, loadConfig, mergeEnvFile, summary } from './config/config.ts';
 import { latestSchemaVersion, migrate, migrationStatus, schemaVersion } from './db/migrate.ts';
 import { invalidateSyncCursors } from './db/repositories/maintenance.ts';
+import { connectUri, DEFAULT_TLS_CERT, tlsInfoFromFile } from './security/tls.ts';
 import { createLogger } from './util/logger.ts';
 
 const USAGE = `Berichtly Server – Backend für die Berichtly-Android-App
@@ -24,6 +25,9 @@ Befehle:
   check-config   Konfiguration prüfen (ohne Secrets auszugeben) und beenden.
   healthcheck    Readiness des laufenden Servers abfragen (Exit-Code 0 = bereit).
   seed-dev       Entwicklungskonto mit Beispieldaten anlegen (nur APP_ENV=development).
+  tls-pin [--cert <datei>] [--address <ip>] [--uri]
+                 Fingerabdruck (Pin) des eigenen TLS-Zertifikats für die App anzeigen (Betrieb ohne
+                 Domain). --uri gibt nur die Verbindungsdaten für die App bzw. den QR-Code aus.
   version        Version anzeigen.
   help           Diese Hilfe anzeigen.
 
@@ -75,6 +79,8 @@ async function main(argv: string[]) {
     case 'version': case '--version':
       console.log(`Berichtly Server ${VERSION}`);
       return;
+    case 'tls-pin':
+      return tlsPin(args.slice(1));
     case 'healthcheck':
       return healthcheck(loadEnv(envFile));
     case 'check-config': {
@@ -211,6 +217,30 @@ async function serve(cfg: Config) {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+function tlsPin(args: string[]) {
+  const opt = (name: string) => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const certFile = opt('--cert') ?? DEFAULT_TLS_CERT;
+  let info;
+  try {
+    info = tlsInfoFromFile(certFile);
+  } catch (e) {
+    fail(1, `Zertifikat nicht lesbar (${certFile}): ${(e as Error).message}`);
+  }
+  const address = opt('--address') ?? /IP Address:([0-9.]+)/.exec(info.subjectAltName)?.[1] ?? '';
+  if (args.includes('--uri')) {
+    if (!address) fail(1, 'Keine IP-Adresse im Zertifikat – bitte --address angeben.');
+    console.log(connectUri(address, info.pin));
+    return;
+  }
+  console.log(`Adresse für die App:   https://${address || '<IP-Adresse>'}
+Fingerabdruck (Pin):   ${info.pin}
+Zertifikat (SHA-256):  ${info.certSha256}
+Gültig bis:            ${info.validTo.toISOString().slice(0, 10)}`);
 }
 
 async function healthcheck(env: Record<string, string | undefined>) {

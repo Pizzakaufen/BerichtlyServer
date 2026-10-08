@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Berichtly Server API
-  version: 1.2.0
+  version: 1.2.1
   description: |
     REST-API des Berichtly Servers – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App.
 
@@ -42,7 +42,9 @@ info:
     Nginx begrenzt zusätzlich grob pro IP; auch diese Antworten haben das Fehlerformat der API.
 
     ## Betrieb hinter Nginx (HTTPS)
-    - Öffentlich erreichbar ist nur Nginx: `https://<domain>/api/v1/...` (TLS 1.2/1.3, HSTS). HTTP-Anfragen werden mit
+    - Öffentlich erreichbar ist nur Nginx: `https://<domain>/api/v1/...` bzw. ohne Domain `https://<ip>/api/v1/...`
+      (TLS 1.2/1.3, HSTS). Ohne Domain hat der Server ein eigenes Zertifikat; die App vertraut ihm über den
+      Fingerabdruck des Schlüssels (`sha256/<Base64>`, `berichtly-server tls-pin`, siehe docs/API.md). HTTP-Anfragen werden mit
       `308` auf HTTPS umgeleitet – die App muss trotzdem immer `https://` verwenden, damit Tokens nie unverschlüsselt
       übertragen werden. Der Node.js-Server selbst lauscht nur intern (127.0.0.1:3000 bzw. im Docker-Netz).
     - Nginx reicht Methode, Pfad, Query, Body, Statuscode und alle Header (auch `Authorization`) unverändert durch und
@@ -57,6 +59,10 @@ servers:
     description: Produktion hinter Nginx (HTTPS)
     variables:
       domain: { default: berichtly.example.de, description: Domain des eigenen Servers (BERICHTLY_DOMAIN) }
+  - url: https://{ip}
+    description: Betrieb ohne Domain (ab 1.2.1) – eigenes Zertifikat, die App prüft den Fingerabdruck (Pin)
+    variables:
+      ip: { default: 203.0.113.10, description: IPv4-Adresse des Servers }
   - url: /
     description: Gleicher Host (z. B. Swagger UI unter /api/docs)
 security:

@@ -1,10 +1,12 @@
 #!/bin/sh
-# Richtet Nginx als einzigen öffentlichen Zugang zu Berichtly Server 1.2 ein (Linux, Debian/Ubuntu-Layout).
+# Richtet Nginx als einzigen öffentlichen Zugang zu Berichtly Server ein (Linux, Debian/Ubuntu-Layout).
 #
 #   sudo ./deploy/install-nginx.sh <domain> [http|https]
+#   sudo ./deploy/install-nginx.sh <ipv4-adresse> ip
 #
 #   http   nur für die Ersteinrichtung: beantwortet die Let's-Encrypt-Prüfung, noch ohne TLS
-#   https  Produktionsbetrieb (Standard); benötigt /etc/letsencrypt/live/<domain>/ – siehe docs/HTTPS.md
+#   https  Produktionsbetrieb mit Domain (Standard); benötigt /etc/letsencrypt/live/<domain>/ – siehe docs/HTTPS.md
+#   ip     Betrieb ohne Domain: HTTPS über die IP-Adresse mit eigenem Zertifikat aus deploy/tls-selfsigned.sh
 #
 # Die Domain wird nur hier übergeben und in die Vorlage eingesetzt – sie steht nirgends fest im Code.
 # Das Skript prüft die Konfiguration mit "nginx -t" und lädt Nginx nur neu, wenn sie gültig ist.
@@ -20,11 +22,20 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Bitte mit sudo ausführen." >&2
     exit 1
 fi
-if ! printf '%s' "$DOMAIN" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'; then
+case "$MODE" in http|https|ip) ;; *) echo "Modus muss http, https oder ip sein." >&2; exit 1 ;; esac
+if [ "$MODE" = ip ]; then
+    if ! printf '%s' "$DOMAIN" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        echo "Verwendung: $0 <ipv4-adresse> ip   (z. B. $0 203.0.113.10 ip)" >&2
+        exit 1
+    fi
+    if [ ! -f /etc/berichtly-server/tls/server.crt ] || [ ! -f /etc/berichtly-server/tls/server.key ]; then
+        echo "Kein Zertifikat unter /etc/berichtly-server/tls/. Zuerst: sudo sh deploy/tls-selfsigned.sh $DOMAIN" >&2
+        exit 1
+    fi
+elif ! printf '%s' "$DOMAIN" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'; then
     echo "Verwendung: $0 <domain> [http|https]   (z. B. $0 berichtly.example.de)" >&2
     exit 1
 fi
-case "$MODE" in http|https) ;; *) echo "Modus muss http oder https sein." >&2; exit 1 ;; esac
 for cmd in nginx envsubst; do
     if ! command -v $cmd >/dev/null 2>&1; then
         echo "$cmd fehlt. Installation: sudo apt install nginx gettext-base" >&2

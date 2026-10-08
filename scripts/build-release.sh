@@ -34,7 +34,7 @@ cp -R src api bin deploy docs package.json package-lock.json .env.example README
 rm -rf "$STAGE/deploy/certbot"
 echo "==> Installiere Laufzeitabhängigkeiten (npm ci --omit=dev)"
 (cd "$STAGE" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null)
-chmod 0755 "$STAGE/bin/berichtly-server" "$STAGE/deploy/install.sh" "$STAGE/deploy/install-nginx.sh" "$STAGE/deploy/setup.sh"
+chmod 0755 "$STAGE/bin/berichtly-server" "$STAGE/deploy/install.sh" "$STAGE/deploy/install-nginx.sh" "$STAGE/deploy/setup.sh" "$STAGE/deploy/tls-selfsigned.sh"
 
 tar -C "$DIST" --owner=0 --group=0 --numeric-owner -czf "$DIST/$NAME.tar.gz" "$NAME"
 rm -rf "$STAGE"

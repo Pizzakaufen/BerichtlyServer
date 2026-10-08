@@ -5,7 +5,9 @@ Konfigurationsdatei lassen sich jederzeit neu installieren). Gesichert werden m�
 
 1. die **Datenbank** (regelmäßig) und
 2. die **Konfiguration** `/etc/berichtly-server/berichtly-server.env` bzw. `.env` (einmalig und nach Änderungen;
-   enthält Secrets – getrennt und verschlüsselt aufbewahren).
+   enthält Secrets – getrennt und verschlüsselt aufbewahren) und
+3. beim Betrieb ohne Domain den **TLS-Schlüssel** `/etc/berichtly-server/tls/` (einmalig; ohne ihn ändert sich nach
+   einer Neuinstallation der Fingerabdruck und alle Apps müssten neu verbunden werden).
 
 Berichtly Server 1.2 enthält bewusst **keine eingebaute automatische Backup-Funktion**: Ein Backup, das auf
 demselben Server oder im selben Container liegt, schützt nicht vor Plattenausfall, Fehlbedienung oder

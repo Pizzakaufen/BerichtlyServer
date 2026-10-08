@@ -75,7 +75,7 @@ test('.env.example vollständig und gültig', () => {
   const keys = [...src.matchAll(/r\.(?:str|int|bool|required|secret|optional)\('([A-Z_]+)'/g)].map((m) => m[1]);
   assert.ok(keys.length >= 40, `nur ${keys.length} Variablen gefunden`);
   // Nginx-/Compose-Variablen werden nicht vom Server gelesen, gehören aber ebenfalls in die Beispieldatei.
-  for (const k of [...new Set(keys), 'BERICHTLY_DOMAIN', 'NGINX_HTTP_PORT', 'NGINX_HTTPS_PORT', 'NGINX_CONFIG']) {
+  for (const k of [...new Set(keys), 'BERICHTLY_DOMAIN', 'NGINX_HTTP_PORT', 'NGINX_HTTPS_PORT', 'NGINX_CONFIG', 'TLS_DIR']) {
     assert.match(example, new RegExp(`^#? ?${k}=`, 'm'), `${k} ist nicht in .env.example dokumentiert`);
   }
   const env = mergeEnvFile(fileURLToPath(new URL('../../.env.example', import.meta.url)), { DB_PASSWORD: 'beispiel', JWT_SECRET: SECRET });

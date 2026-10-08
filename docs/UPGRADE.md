@@ -1,9 +1,21 @@
 # Upgrade-Anleitung – Berichtly Server
 
+- [1.2 → 1.2.1 (Betrieb ohne Domain)](#upgrade-von-12-auf-121)
 - [1.1 → 1.2 (Go → Node.js, Nginx)](#upgrade-von-11-auf-12)
 - [1.0 Alpha → 1.1](#upgrade-von-10-alpha-auf-11)
 
 Vor jedem Upgrade ein Backup erstellen ([BACKUP.md](BACKUP.md)).
+
+## Upgrade von 1.2 auf 1.2.1
+
+1.2.1 ergänzt den Betrieb ohne Domain (HTTPS über die IP-Adresse, eigenes Zertifikat, Fingerabdruck für die App).
+API und Datenbank sind unverändert, es gibt keine neue Migration.
+
+- **Installation mit Domain:** Installationsbefehl erneut ausführen – die Domain wird beibehalten.
+- **Installation ohne funktionierende Domain** (z. B. weil das Zertifikat nicht ausgestellt werden konnte):
+  Installationsbefehl erneut ausführen. Eine gespeicherte Domain ohne Zertifikat wird verworfen und der Server auf
+  den Betrieb über die IP-Adresse umgestellt. Danach Adresse und Fingerabdruck in der App eintragen.
+- Wechsel von einer Domain zur IP oder umgekehrt jederzeit mit `setup.sh <ip>` bzw. `setup.sh <domain> <e-mail>`.
 
 ## Upgrade von 1.1 auf 1.2
 
