@@ -56,24 +56,29 @@ Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Installation in einem Schritt (empfohlen)
 
-Voraussetzungen: ein Debian-/Ubuntu-Server mit SSH-Zugang und eine Domain, deren DNS-Eintrag auf den Server zeigt.
+Voraussetzungen: ein Debian-/Ubuntu-Server und eine Domain, deren DNS-Eintrag auf den Server zeigt.
 
-Von Windows aus (lädt das Paket hoch und richtet alles ein):
+Auf dem Server als root diesen einen Befehl ausführen – er fragt nach Domain und E-Mail und richtet alles ein:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Pizzakaufen/BerichtlyServer/main/install-from-github.sh | sh
+```
+
+**Update:** denselben Befehl erneut ausführen (ohne Rückfragen; Daten, Passwörter und Zertifikate bleiben erhalten).
+
+Ist das Repository privat, funktioniert der Download über `raw.githubusercontent.com` nur mit Token. Dann zuerst den
+Token in eine Variable lesen (erscheint so nicht im Verlauf) und mitgeben:
+
+```bash
+read -rs GITHUB_TOKEN && export GITHUB_TOKEN
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubusercontent.com/Pizzakaufen/BerichtlyServer/main/install-from-github.sh | sh
+```
+
+Von Windows aus mit dem selbst gebauten Paket (`dist/`):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-on-server.ps1 -Server <SERVER-IP> -Domain berichtly.example.de -Email admin@example.de
 ```
-
-Oder direkt von GitHub auf dem Server (als root):
-
-```bash
-apt-get update && apt-get install -y git
-git clone https://github.com/Pizzakaufen/BerichtlyServer.git /opt/berichtly-src
-sh /opt/berichtly-src/deploy/setup.sh berichtly.example.de admin@example.de
-```
-
-Das Repository ist privat: `git clone` fragt nach dem GitHub-Benutzernamen und einem Personal Access Token (nicht
-dem GitHub-Passwort). Update später: `git -C /opt/berichtly-src pull` und `setup.sh` erneut ausführen.
 
 Oder direkt auf dem Server im entpackten Paket:
 
