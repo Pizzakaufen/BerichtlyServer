@@ -54,7 +54,28 @@ kein Redis). Einzige Datenbank ist PostgreSQL.
 
 Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-## Schnellstart: Linux-Server (systemd)
+## Installation in einem Schritt (empfohlen)
+
+Voraussetzungen: ein Debian-/Ubuntu-Server mit SSH-Zugang und eine Domain, deren DNS-Eintrag auf den Server zeigt.
+
+Von Windows aus (lädt das Paket hoch und richtet alles ein):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-on-server.ps1 -Server <SERVER-IP> -Domain berichtly.example.de -Email admin@example.de
+```
+
+Oder direkt auf dem Server im entpackten Paket:
+
+```bash
+sudo sh deploy/setup.sh berichtly.example.de admin@example.de
+```
+
+`deploy/setup.sh` installiert Node.js 24, PostgreSQL, Nginx und Certbot, legt die Datenbank an, erzeugt zufällige
+Passwörter und Schlüssel (nur in `/etc/berichtly-server/berichtly-server.env`), startet den Dienst, öffnet die
+Firewall (ufw), holt das Let's-Encrypt-Zertifikat und aktiviert HTTPS. Es kann für Updates oder nach einem Fehler
+einfach erneut ausgeführt werden; Daten, Passwörter und Zertifikate bleiben erhalten.
+
+## Schritt für Schritt: Linux-Server (systemd)
 
 Voraussetzungen: Debian 12 / Ubuntu 24.04 o. ä. mit systemd, Node.js 24 LTS, PostgreSQL, Nginx, eine Domain mit
 DNS-Eintrag auf den Server. Ausführlich: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), HTTPS: [docs/HTTPS.md](docs/HTTPS.md).
