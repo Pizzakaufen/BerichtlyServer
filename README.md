@@ -64,6 +64,17 @@ Von Windows aus (lädt das Paket hoch und richtet alles ein):
 powershell -ExecutionPolicy Bypass -File scripts\install-on-server.ps1 -Server <SERVER-IP> -Domain berichtly.example.de -Email admin@example.de
 ```
 
+Oder direkt von GitHub auf dem Server (als root):
+
+```bash
+apt-get update && apt-get install -y git
+git clone https://github.com/Pizzakaufen/BerichtlyServer.git /opt/berichtly-src
+sh /opt/berichtly-src/deploy/setup.sh berichtly.example.de admin@example.de
+```
+
+Das Repository ist privat: `git clone` fragt nach dem GitHub-Benutzernamen und einem Personal Access Token (nicht
+dem GitHub-Passwort). Update später: `git -C /opt/berichtly-src pull` und `setup.sh` erneut ausführen.
+
 Oder direkt auf dem Server im entpackten Paket:
 
 ```bash
