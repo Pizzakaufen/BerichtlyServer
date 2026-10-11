@@ -8,7 +8,7 @@ import {
   ApiError, badParameter, Codes, type ConflictInfo, type ConflictReason, type FieldError, validationError,
 } from '../domain/errors.ts';
 import { formatTime, formatTimeOrNull } from '../domain/date.ts';
-import { dailyDto, profileDto, weeklyDto, type WriteMeta } from '../domain/models.ts';
+import { dailyDto, profileDto, SERVER_CAPABILITIES, weeklyDto, type WriteMeta } from '../domain/models.ts';
 import { type Database, lockUser, type Queryable } from '../db/pool.ts';
 import * as repo from '../db/repositories/reports.ts';
 import * as ops from '../db/repositories/maintenance.ts';
@@ -221,6 +221,8 @@ export class SyncService {
       cursorEpoch: state.epoch,
       serverTime: formatTime(this.now()),
       device: p.deviceRef ? await this.deviceStatus(p) : null,
+      // Seit 1.3: Apps erkennen daran z. B. die Statuswerte „Prüfung erforderlich“ und „Freigegeben“.
+      capabilities: [...SERVER_CAPABILITIES],
     };
   }
 

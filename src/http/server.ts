@@ -356,8 +356,33 @@ function internalStatus(d: Deps, metrics: Metrics) {
       cpus: availableParallelism(),
       nodeVersion: process.version,
     };
+    // Übersicht (seit 1.3): nur Anzahlen – keine Namen, E-Mail-Adressen, Gerätenamen oder Berichtsinhalte.
+    let overview: Record<string, unknown> | null = null;
+    if (db.state === 'UP') {
+      try {
+        const counts = (await d.db.pool.query<{ accounts: string; devices: string; daily: string; weekly: string; size: string }>(
+          `SELECT (SELECT count(*) FROM users)                                  AS accounts,
+                  (SELECT count(*) FROM devices WHERE revoked_at IS NULL)        AS devices,
+                  (SELECT count(*) FROM daily_reports WHERE deleted_at IS NULL)  AS daily,
+                  (SELECT count(*) FROM weekly_reports WHERE deleted_at IS NULL) AS weekly,
+                  pg_database_size(current_database())                         AS size`)).rows[0];
+        const bySync = (await d.db.pool.query<{ sync_status: string; n: string }>(
+          'SELECT sync_status, count(*) AS n FROM devices WHERE revoked_at IS NULL GROUP BY sync_status')).rows;
+        overview = {
+          accounts: Number(counts.accounts),
+          activeDevices: Number(counts.devices),
+          devicesBySyncStatus: Object.fromEntries(bySync.map((r) => [r.sync_status, Number(r.n)])),
+          dailyReports: Number(counts.daily),
+          weeklyReports: Number(counts.weekly),
+          databaseSizeMb: Math.round(Number(counts.size) / 2 ** 20),
+        };
+      } catch {
+        overview = null;
+      }
+    }
     const overall = db.state === 'DOWN' ? 'DOWN' : resources.state !== 'UP' ? 'DEGRADED' : 'UP';
     sendData(reply, overall === 'DOWN' ? 503 : 200, {
+      overview,
       state: overall,
       version: d.version,
       environment: d.config.env,

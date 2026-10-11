@@ -3,7 +3,11 @@
 
 import { formatTime, formatTimeOrNull, type IsoWeek, weekContaining } from './date.ts';
 
-export const REPORT_STATUSES = ['DRAFT', 'GENERATED', 'EDITED', 'FINALIZED'] as const;
+/** Statuswerte; REVIEW_REQUIRED und APPROVED seit Server 1.3 (App 3.0). */
+export const REPORT_STATUSES = ['DRAFT', 'GENERATED', 'EDITED', 'FINALIZED', 'REVIEW_REQUIRED', 'APPROVED'] as const;
+
+/** Fähigkeiten, die Apps über GET /sync/status erkennen (ältere Server senden keine). */
+export const SERVER_CAPABILITIES = ['REVIEW_STATUS'] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 export const WRITING_STYLES = ['NEUTRAL', 'FORMAL', 'SIMPLE', 'DETAILED'] as const;
 export type WritingStyle = (typeof WRITING_STYLES)[number];

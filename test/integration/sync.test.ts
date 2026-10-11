@@ -133,4 +133,22 @@ describe('Synchronisierung', needsDb, () => {
     assert.equal((await e.get('/api/v1/weeks/current', newYork.access)).data.weekStart, '2026-09-28');
     assert.equal((await e.get('/api/v1/weeks/current', newYork.access)).data.today, '2026-10-04');
   });
+
+  test('Prüf- und Freigabestatus (1.3)', async () => {
+    const e = await newEnv();
+    const tok = (await e.register()).access;
+    const st = (await e.get('/api/v1/sync/status', tok)).expect(200);
+    assert.deepEqual(st.data.capabilities, ['REVIEW_STATUS']);
+
+    const day = uuid();
+    const week = uuid();
+    const r = (await e.post('/api/v1/sync/push', tok, push(
+      { type: 'DAILY_REPORT', operation: 'UPSERT', id: day, baseVersion: null, data: { date: '2026-10-05', text: 'Kasse', status: 'REVIEW_REQUIRED' } },
+      { type: 'WEEKLY_REPORT', operation: 'UPSERT', id: week, baseVersion: null, data: { weekStart: '2026-10-05', content: 'Bericht', status: 'APPROVED' } },
+      { type: 'DAILY_REPORT', operation: 'UPSERT', id: uuid(), baseVersion: null, data: { date: '2026-10-06', text: 'x', status: 'PARTY' } },
+    ))).expect(200);
+    assert.deepEqual(statuses(r), ['APPLIED', 'APPLIED', 'REJECTED']);
+    assert.equal((await e.get(`/api/v1/daily-reports/${day}`, tok)).expect(200).data.status, 'REVIEW_REQUIRED');
+    assert.equal((await e.get(`/api/v1/weekly-reports/${week}`, tok)).expect(200).data.status, 'APPROVED');
+  });
 });

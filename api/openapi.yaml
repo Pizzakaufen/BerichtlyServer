@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Berichtly Server API
-  version: 1.2.1
+  version: 1.3.0
   description: |
     REST-API des Berichtly Servers – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App.
 
@@ -625,7 +625,10 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   schemas:
-    ReportStatus: { type: string, enum: [DRAFT, GENERATED, EDITED, FINALIZED] }
+    ReportStatus:
+      type: string
+      enum: [DRAFT, GENERATED, EDITED, FINALIZED, REVIEW_REQUIRED, APPROVED]
+      description: "REVIEW_REQUIRED (Prüfung erforderlich) und APPROVED (Freigegeben) seit 1.3"
     WritingStyle: { type: string, enum: [NEUTRAL, FORMAL, SIMPLE, DETAILED] }
     PageMeta:
       type: object
@@ -984,6 +987,10 @@ components:
         cursorEpoch: { type: integer, description: "Aktuelle Cursor-Epoche; steigt bei Tombstone-Bereinigung und nach reset-sync-cursors (1.1)" }
         serverTime: { type: string, format: date-time }
         device: { allOf: [{ $ref: "#/components/schemas/SyncDeviceStatus" }], nullable: true }
+        capabilities:
+          type: array
+          items: { type: string, enum: [REVIEW_STATUS] }
+          description: "Fähigkeiten des Servers (1.3); fehlt bei älteren Servern. REVIEW_STATUS = Statuswerte REVIEW_REQUIRED und APPROVED"
     Device:
       type: object
       readOnly: true
