@@ -53,4 +53,6 @@ server {
     # OCSP Stapling entfällt: Let's Encrypt betreibt seit 2025 keine OCSP-Responder mehr.
 
     include /etc/nginx/snippets/berichtly-api.conf;
+    # Admin-Dashboard (Server 2.0, optional): siehe docs/ADMIN.md
+    # include /etc/nginx/snippets/berichtly-admin.conf;
 }

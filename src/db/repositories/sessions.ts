@@ -3,7 +3,7 @@ import type { Device, DeviceInfo, SecurityEvent, Session, SyncStatus } from '../
 import type { Queryable } from '../pool.ts';
 
 export type RevokeReason = 'LOGOUT' | 'LOGOUT_ALL' | 'REFRESH_TOKEN_REUSE' | 'DEVICE_REMOVED' | 'SESSION_REMOVED'
-  | 'PASSWORD_CHANGED';
+  | 'PASSWORD_CHANGED' | 'ADMIN_ACTION';
 
 export async function createSession(q: Queryable, sessionId: string, userId: string, deviceRef: string | null,
   maxLifetimeSec: number) {

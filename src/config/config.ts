@@ -64,6 +64,8 @@ export interface Config {
   log: { level: 'debug' | 'info' | 'warn' | 'error'; format: 'text' | 'json' };
   apiDocs: boolean;
   status: { internalToken: string; minFreeDiskMb: number };
+  /** Admin-Dashboard (seit 2.0): standardmäßig aus; Rechte nur per CLI. */
+  admin: { enabled: boolean; sessionIdleSec: number; sessionMaxSec: number; cookieSecure: boolean; loginPerMinute: number; backupDir: string };
 }
 
 const DAY = 86_400;
@@ -200,6 +202,15 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     log: { level: level as Config['log']['level'], format: format as Config['log']['format'] },
     apiDocs: r.bool('API_DOCS_ENABLED', !prod),
     status: { internalToken, minFreeDiskMb: r.int('STATUS_MIN_FREE_DISK_MB', 512, 0, 10_000_000) },
+    admin: {
+      enabled: r.bool('ADMIN_DASHBOARD_ENABLED', false),
+      sessionIdleSec: r.int('ADMIN_SESSION_IDLE_MINUTES', 30, 5, 240) * 60,
+      sessionMaxSec: r.int('ADMIN_SESSION_MAX_HOURS', 8, 1, 24) * 3600,
+      // In Produktion immer „Secure“ (nur über HTTPS); zum lokalen Testen ohne TLS abschaltbar.
+      cookieSecure: prod ? true : r.bool('ADMIN_COOKIE_SECURE', true),
+      loginPerMinute: r.int('RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE', 5, 1, 100),
+      backupDir: r.str('BACKUP_DIR', '/var/backups/berichtly'),
+    },
   };
   if (r.errors.length > 0) throw new ConfigError(`Konfigurationsfehler:\n  - ${r.errors.join('\n  - ')}`);
   return config;
@@ -220,6 +231,8 @@ export function summary(c: Config): string {
     `Logging:    ${c.log.level} / ${c.log.format}`,
     `API-Doku:   ${c.apiDocs ? 'aktiviert (/api/docs)' : 'deaktiviert'}`,
     `Status:     ${c.status.internalToken ? 'aktiviert (Token gesetzt)' : '<deaktiviert>'}`,
+    `Admin:      ${c.admin.enabled ? `aktiviert (/admin, Sitzung ${c.admin.sessionIdleSec / 60} min Leerlauf, max. ${c.admin.sessionMaxSec / 3600} h, Cookie Secure=${c.admin.cookieSecure})` : '<deaktiviert>'}`,
+    `Backups:    ${c.admin.backupDir}`,
   ].join('\n');
 }
 

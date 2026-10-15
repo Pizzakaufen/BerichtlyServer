@@ -1,10 +1,38 @@
 # Upgrade-Anleitung – Berichtly Server
 
+- [1.2.x/1.3 → 2.0 (Admin-Dashboard, Rollen, Backup-Skript)](#upgrade-auf-20)
 - [1.2 → 1.2.1 (Betrieb ohne Domain)](#upgrade-von-12-auf-121)
 - [1.1 → 1.2 (Go → Node.js, Nginx)](#upgrade-von-11-auf-12)
 - [1.0 Alpha → 1.1](#upgrade-von-10-alpha-auf-11)
 
 Vor jedem Upgrade ein Backup erstellen ([BACKUP.md](BACKUP.md)).
+
+## Upgrade auf 2.0
+
+2.0 ergänzt Rollen, das optionale Admin-Dashboard, ein Audit-Protokoll und das Backup-Skript. Die API `/api/v1`
+bleibt unverändert und rückwärtskompatibel: Apps ab 2.x funktionieren ohne Änderung weiter, angemeldete Apps
+bleiben angemeldet. Die Migration `0005_server_2_0` ist rein additiv (neue Spalte `users.role` mit Standard
+`user`, drei neue Tabellen).
+
+```bash
+# 1. Backup
+sudo deploy/backup.sh            # neu in 2.0 – oder wie bisher per pg_dump (BACKUP.md)
+
+# 2. Release installieren bzw. Installationsbefehl erneut ausführen (migriert automatisch, wenn
+#    DB_MIGRATE_ON_START=true; sonst:)
+sudo -u berichtly berichtly-server --env-file /etc/berichtly-server/berichtly-server.env migrate
+
+# 3. Prüfen
+sudo -u berichtly berichtly-server --env-file /etc/berichtly-server/berichtly-server.env migrate-status
+sudo -u berichtly berichtly-server --env-file /etc/berichtly-server/berichtly-server.env healthcheck
+```
+
+Das Admin-Dashboard bleibt nach dem Upgrade **ausgeschaltet**. Einschalten: [ADMIN.md](ADMIN.md). Docker Compose:
+`docker compose pull && docker compose up -d` bzw. `docker compose build && docker compose up -d`; Migration und
+Rechtevergabe mit `docker compose run --rm server migrate` bzw. `… admin grant <E-Mail>`.
+
+Hinweis zum Repository: Nach einem Checkout unter Windows ggf. die Ausführungsrechte setzen
+(`chmod +x deploy/backup.sh deploy/restore.sh`).
 
 ## Upgrade von 1.2 auf 1.2.1
 

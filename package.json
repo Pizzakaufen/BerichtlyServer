@@ -1,6 +1,6 @@
 {
   "name": "berichtly-server",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "description": "Berichtly Server – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App",
   "private": true,
   "license": "UNLICENSED",

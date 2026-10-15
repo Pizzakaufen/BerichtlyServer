@@ -9,10 +9,82 @@ Konfigurationsdatei lassen sich jederzeit neu installieren). Gesichert werden m�
 3. beim Betrieb ohne Domain den **TLS-Schlüssel** `/etc/berichtly-server/tls/` (einmalig; ohne ihn ändert sich nach
    einer Neuinstallation der Fingerabdruck und alle Apps müssten neu verbunden werden).
 
-Berichtly Server 1.2 enthält bewusst **keine eingebaute automatische Backup-Funktion**: Ein Backup, das auf
-demselben Server oder im selben Container liegt, schützt nicht vor Plattenausfall, Fehlbedienung oder
-Kompromittierung. Zuverlässig ist ein Ablauf, der die Sicherung **außerhalb** des Servers ablegt – dafür sind die
-Standardwerkzeuge von PostgreSQL gedacht.
+Ein Backup, das auf demselben Server oder im selben Container liegt, schützt nicht vor Plattenausfall,
+Fehlbedienung oder Kompromittierung. Zuverlässig ist ein Ablauf, der die Sicherung zusätzlich **außerhalb** des
+Servers ablegt.
+
+## Backup-Skript (seit 2.0)
+
+`deploy/backup.sh` erstellt ein Dump, **prüft** es und protokolliert das Ergebnis (sichtbar im Admin-Dashboard unter
+„System“ und mit `berichtly-server backups`):
+
+1. `pg_dump --format=custom` in eine temporäre Datei,
+2. Integritätsprüfung: `pg_restore --list` muss das gesamte Archiv lesen können und Tabellendaten (mindestens
+   `users`) finden – erst dann wird die Datei umbenannt,
+3. SHA-256-Prüfsumme als `<datei>.sha256`,
+4. Aufbewahrung: ältere Dateien als `RETENTION_DAYS` (Standard 14) werden gelöscht, nie die gerade erstellte,
+5. Protokoll über `berichtly-server backup-record` – auch Fehlschläge.
+
+```bash
+sudo deploy/backup.sh                                   # systemd-Installation
+sudo BACKUP_DIR=/srv/backup RETENTION_DAYS=30 deploy/backup.sh
+deploy/backup.sh --docker                               # Docker Compose (im Projektverzeichnis)
+```
+
+**Grenzen der Prüfung:** Ein Backup gilt nicht schon als erfolgreich, weil eine Datei entstanden ist. Das Skript
+beweist, dass das Archiv vollständig lesbar und strukturell intakt ist und die Kerntabelle enthält. Ob eine
+Wiederherstellung inhaltlich vollständig gelingt, zeigt nur eine **Probe-Wiederherstellung** (unten) – regelmäßig,
+mindestens nach jedem Upgrade.
+
+Täglich per systemd-Timer (Beispiel, als root anlegen):
+
+```ini
+# /etc/systemd/system/berichtly-backup.service
+[Unit]
+Description=Berichtly Server – Datenbank-Backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+Environment=BACKUP_DIR=/var/backups/berichtly RETENTION_DAYS=14
+ExecStart=/opt/berichtly-server/deploy/backup.sh
+
+# /etc/systemd/system/berichtly-backup.timer
+[Unit]
+Description=Berichtly Server – tägliches Backup
+
+[Timer]
+OnCalendar=*-*-* 03:15
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+`systemctl daemon-reload && systemctl enable --now berichtly-backup.timer`. Den Pfad zum Skript an die eigene
+Installation anpassen. Die Dateien anschließend von einem **anderen** Rechner abholen (Pull-Prinzip, z. B.
+`rsync`, `restic` oder `borg`).
+
+## Probe-Wiederherstellung (ohne den Live-Betrieb zu berühren)
+
+```bash
+sudo -u postgres createdb berichtly_restore_test
+sudo -u postgres pg_restore --dbname=berichtly_restore_test --no-owner /var/backups/berichtly/berichtly-….dump
+sudo -u postgres psql berichtly_restore_test -c "SELECT count(*) FROM users; SELECT count(*) FROM daily_reports; SELECT max(version) FROM schema_migrations;"
+sudo -u postgres dropdb berichtly_restore_test
+```
+
+Die Zahlen mit dem Admin-Dashboard („Übersicht“) vergleichen.
+
+## Wiederherstellung per Skript (seit 2.0)
+
+`deploy/restore.sh <datei.dump> [--docker]` prüft Prüfsumme und Lesbarkeit, verlangt die Eingabe des
+Datenbanknamens als Bestätigung, stoppt den Server, spielt das Backup ein, führt Migrationen aus, setzt die
+Sync-Cursor zurück (siehe unten) und startet den Server wieder. Die manuellen Schritte stehen weiter unten.
+
+> **Teststand:** `backup.sh` und `restore.sh` wurden geschrieben und mit `bash -n` auf Syntax geprüft, aber in der
+> Entwicklungsumgebung **nicht ausgeführt** (kein PostgreSQL verfügbar). Vor dem ersten Einsatz einmal mit einer
+> Probe-Wiederherstellung kontrollieren.
 
 ## Manuelles Backup
 

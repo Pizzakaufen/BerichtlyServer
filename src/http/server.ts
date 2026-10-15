@@ -23,6 +23,8 @@ import type { Logger } from '../util/logger.ts';
 import { Limiter, Metrics } from './limiter.ts';
 import { JSON_TYPE, sendData, sendError } from './respond.ts';
 import { routesV1 } from './routes-v1.ts';
+import { adminRoutes } from './admin.ts';
+import { AdminService } from '../services/admin.ts';
 
 export interface Deps {
   config: Config;
@@ -247,6 +249,9 @@ export async function buildServer(d: Deps): Promise<Server> {
   };
 
   routesV1(helper, '/api/v1');
+
+  // Admin-Dashboard (seit 2.0): nur, wenn ausdrücklich aktiviert – sonst existieren die Routen nicht.
+  if (cfg.admin.enabled) adminRoutes(app, d, metrics, new AdminService(d.db, cfg, d.auth.hasher, d.log));
 
   // Interner Status (nur mit INTERNAL_STATUS_TOKEN; über Nginx gesperrt) und API-Dokumentation (optional)
   if (cfg.status.internalToken) app.get('/internal/status', internalStatus(d, metrics));

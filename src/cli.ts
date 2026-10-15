@@ -5,6 +5,7 @@ import { App, VERSION } from './app.ts';
 import { type Config, ConfigError, loadConfig, mergeEnvFile, summary } from './config/config.ts';
 import { latestSchemaVersion, migrate, migrationStatus, schemaVersion } from './db/migrate.ts';
 import { invalidateSyncCursors } from './db/repositories/maintenance.ts';
+import { audit, insertBackupRun, listAdmins, listBackups, setRoleByEmail } from './db/repositories/admin.ts';
 import { connectUri, DEFAULT_TLS_CERT, tlsInfoFromFile } from './security/tls.ts';
 import { createLogger } from './util/logger.ts';
 
@@ -25,6 +26,13 @@ Befehle:
   check-config   Konfiguration prüfen (ohne Secrets auszugeben) und beenden.
   healthcheck    Readiness des laufenden Servers abfragen (Exit-Code 0 = bereit).
   seed-dev       Entwicklungskonto mit Beispieldaten anlegen (nur APP_ENV=development).
+  admin grant <E-Mail> | admin revoke <E-Mail> | admin list
+                 Administratorrechte für das Admin-Dashboard vergeben, entziehen bzw. anzeigen (seit 2.0).
+                 Rechte gibt es nur über diese Befehle, nie über die API.
+  backup-record --file <name> --started <ISO-Zeit> --result SUCCESS|FAILED [--size <Byte>] [--sha256 <hex>]
+                [--verified true|false] [--verification <text>] [--error <text>]
+                 Ergebnis eines Backups protokollieren (wird von deploy/backup.sh aufgerufen, seit 2.0).
+  backups        Die letzten Backups anzeigen.
   tls-pin [--cert <datei>] [--address <ip>] [--uri]
                  Fingerabdruck (Pin) des eigenen TLS-Zertifikats für die App anzeigen (Betrieb ohne
                  Domain). --uri gibt nur die Verbindungsdaten für die App bzw. den QR-Code aus.
@@ -156,6 +164,12 @@ async function main(argv: string[]) {
       await a.close();
       return;
     }
+    case 'admin':
+      return adminCmd(config(envFile), args.slice(1));
+    case 'backup-record':
+      return backupRecord(config(envFile), args.slice(1));
+    case 'backups':
+      return backupsCmd(config(envFile));
     case 'serve':
       return serve(config(envFile));
     default:
@@ -305,6 +319,76 @@ async function dbCheck(cfg: Config) {
   if (v !== latestSchemaVersion()) {
     console.log("Hinweis: Schema nicht aktuell – 'berichtly-server migrate' ausführen.");
     process.exit(1);
+  }
+}
+
+// --- Administratorrechte und Backup-Protokoll (seit 2.0) ------------------------------------------
+
+async function adminCmd(cfg: Config, args: string[]) {
+  const [sub, email] = args;
+  if (!sub || !['grant', 'revoke', 'list'].includes(sub) || (sub !== 'list' && !email)) {
+    fail(2, 'Verwendung: berichtly-server admin grant <E-Mail> | admin revoke <E-Mail> | admin list');
+  }
+  const a = newApp(cfg);
+  try {
+    if (sub === 'list') {
+      const admins = await listAdmins(a.db.pool);
+      console.log(admins.length === 0 ? 'Keine Administratoren.' : admins.map((x) => `${x.email} (${x.status})`).join('
+'));
+    } else {
+      const ok = await setRoleByEmail(a.db.pool, email, sub === 'grant' ? 'admin' : 'user');
+      if (!ok) {
+        await a.close();
+        fail(1, `Kein Konto mit der E-Mail-Adresse ${email}.`);
+      }
+      await audit(a.db.pool, null, sub === 'grant' ? 'ADMIN_GRANTED_CLI' : 'ADMIN_REVOKED_CLI', null, email.toLowerCase().slice(0, 64));
+      a.log.warn(sub === 'grant' ? 'Administratorrechte per CLI vergeben' : 'Administratorrechte per CLI entzogen');
+      console.log(sub === 'grant' ? `${email} ist jetzt Administrator.` : `${email} ist kein Administrator mehr.`);
+    }
+  } finally {
+    await a.close();
+  }
+}
+
+function flag(args: string[], name: string): string | undefined {
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+}
+
+async function backupRecord(cfg: Config, args: string[]) {
+  const file = flag(args, 'file');
+  const started = flag(args, 'started');
+  const result = flag(args, 'result');
+  const startedAt = started ? new Date(started) : null;
+  if (!file || !startedAt || Number.isNaN(startedAt.getTime()) || (result !== 'SUCCESS' && result !== 'FAILED')) {
+    fail(2, 'Verwendung: berichtly-server backup-record --file <name> --started <ISO-Zeit> --result SUCCESS|FAILED [...]');
+  }
+  const size = flag(args, 'size');
+  const sha = flag(args, 'sha256');
+  if (sha && !/^[0-9a-f]{64}$/.test(sha)) fail(2, '--sha256 muss 64 hexadezimale Zeichen enthalten');
+  const a = newApp(cfg);
+  try {
+    await insertBackupRun(a.db.pool, {
+      startedAt, fileName: file.slice(0, 255), sizeBytes: size && /^d+$/.test(size) ? Number(size) : null, sha256: sha ?? null,
+      verified: flag(args, 'verified') === 'true', verification: flag(args, 'verification')?.slice(0, 255) ?? null,
+      result, error: flag(args, 'error')?.slice(0, 255) ?? null,
+    });
+  } finally {
+    await a.close();
+  }
+  console.log('Backup protokolliert.');
+}
+
+async function backupsCmd(cfg: Config) {
+  const a = newApp(cfg);
+  try {
+    const runs = await listBackups(a.db.pool, 20);
+    if (runs.length === 0) console.log('Noch keine Backups protokolliert.');
+    for (const r of runs) {
+      console.log(`${r.finishedAt.toISOString()}  ${r.result.padEnd(7)}  ${r.verified ? 'geprüft' : 'ungeprüft'}  ${r.fileName}${r.error ? '  ' + r.error : ''}`);
+    }
+  } finally {
+    await a.close();
   }
 }
 

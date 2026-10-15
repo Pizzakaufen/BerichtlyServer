@@ -57,7 +57,7 @@ fi
 
 install -d -m 0755 /etc/nginx/snippets /var/www/certbot
 install -m 0644 deploy/nginx/snippets/berichtly-http-context.conf deploy/nginx/snippets/berichtly-api.conf \
-    deploy/nginx/snippets/berichtly-proxy.conf /etc/nginx/snippets/
+    deploy/nginx/snippets/berichtly-proxy.conf deploy/nginx/snippets/berichtly-admin.conf /etc/nginx/snippets/
 
 TARGET=/etc/nginx/sites-available/berichtly.conf
 TMP="$TARGET.new"

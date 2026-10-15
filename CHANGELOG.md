@@ -1,5 +1,56 @@
 # Changelog
 
+## 2.0.0 – 2026-10-15
+
+Rollen, Admin-Dashboard, Audit- und Backup-Protokoll. **API `/api/v1` unverändert** (39 Endpunkte, gleiche Felder
+und Fehlercodes) – bestehende Apps funktionieren ohne Änderung, angemeldete Apps bleiben angemeldet.
+
+> **Teststand:** Alle Änderungen dieses Releases wurden geschrieben, aber in der Entwicklungsumgebung **nicht
+> ausgeführt** – dort standen weder Node.js noch PostgreSQL zur Verfügung (Entscheidung des Betreibers, nichts zu
+> installieren). Es lief weder `npm run typecheck` noch `npm test`. Lediglich `deploy/backup.sh` und
+> `deploy/restore.sh` wurden mit `bash -n` auf Syntax geprüft. Vor dem produktiven Einsatz bitte Typecheck und
+> Tests mit einer Testdatenbank ausführen.
+
+### Datenbank (Migration 0005, rein additiv)
+- `users.role` (`user`/`admin`, Standard `user`), `admin_sessions`, `admin_audit_log`, `backup_runs`.
+
+### Admin-Dashboard (`/admin`, standardmäßig aus)
+- Serverseitig gerendertes HTML ohne JavaScript: Übersicht (Node.js, PostgreSQL, Proxy, API-Fehler, Konten,
+  Geräte, Synchronisierung, Speicher), Benutzer (Suche, Status, Geräte, Sperren/Freigeben, Sitzungen beenden, Gerät
+  abmelden), Synchronisierungshistorie (Status und Fehlercodes je Gerät), System (Versionen, Migrationen, Speicher,
+  Backups, Verwaltungsprotokoll).
+- Anmeldung nur mit Rolle `admin` (Vergabe ausschließlich per CLI `admin grant`), Rate-Limit, Kontosperre,
+  Sitzungs-Cookie `HttpOnly`/`Secure`/`SameSite=Strict` mit Leerlauf- und Höchstdauer, CSRF-Token, Prüfung der
+  Herkunft, ausdrückliche Bestätigung jeder Aktion, strenge CSP, Audit-Protokoll. Keine Berichtsinhalte, Tokens oder
+  Passwort-Hashes in der Oberfläche.
+- Nginx: neues, optionales Snippet `berichtly-admin.conf` (nur bewusst im HTTPS-Block einbinden, IP-Beschränkung
+  vorbereitet). Ohne Einbindung bleibt `/admin` von außen 404.
+
+### Betrieb
+- `deploy/backup.sh`: Dump, Integritätsprüfung mit `pg_restore --list`, SHA-256, Aufbewahrung, Protokoll (auch bei
+  Fehlern); `deploy/restore.sh`: Prüfung, Bestätigung, Einspielen, Migration, Cursor-Reset, Neustart.
+- CLI: `admin grant|revoke|list`, `backup-record`, `backups`.
+- Wartung entfernt zusätzlich abgelaufene Admin-Sitzungen.
+- Neue Einstellungen: `ADMIN_DASHBOARD_ENABLED`, `ADMIN_SESSION_IDLE_MINUTES`, `ADMIN_SESSION_MAX_HOURS`,
+  `RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE`, `ADMIN_COOKIE_SECURE` (nur außerhalb der Produktion), `BACKUP_DIR`.
+- Doku: ADMIN.md (neu), BACKUP.md (Skript, Timer, Probe-Wiederherstellung, Grenzen der Prüfung), UPGRADE.md.
+
+### Bewusst nicht enthalten
+- **Keine Server-KI** (Entscheidung des Betreibers): Berichtsinhalte werden nie zur Verarbeitung an den Server
+  gesendet; die App formuliert ausschließlich lokal.
+- Keine serverseitige „Wiederholung“ von Synchronisierungen – sie starten im Protokoll immer auf dem Gerät.
+
+### Tests (geschrieben, nicht ausgeführt)
+- `test/integration/admin.test.ts`, `test/unit/admin.test.ts`; `test/unit/openapi.test.ts` erwartet 2.0.0.
+
+## 1.3.0 – 2026-10-11
+
+Prüf- und Freigabestatus für Berichtly App 3.0 (nachgetragen).
+
+- Migration 0004: Statuswerte `REVIEW_REQUIRED` und `APPROVED` für Tages- und Wochenberichte.
+- `GET /api/v1/sync/status` meldet die Fähigkeit `REVIEW_STATUS`; ältere Apps senden diese Werte nie.
+- Interner Status mit Übersicht (nur Anzahlen).
+
 ## 1.2.1 – 2026-10-08
 
 Betrieb ohne Domain. API und Datenbank unverändert, keine Migration.
