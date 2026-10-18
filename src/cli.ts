@@ -333,8 +333,7 @@ async function adminCmd(cfg: Config, args: string[]) {
   try {
     if (sub === 'list') {
       const admins = await listAdmins(a.db.pool);
-      console.log(admins.length === 0 ? 'Keine Administratoren.' : admins.map((x) => `${x.email} (${x.status})`).join('
-'));
+      console.log(admins.length === 0 ? 'Keine Administratoren.' : admins.map((x) => `${x.email} (${x.status})`).join('\n'));
     } else {
       const ok = await setRoleByEmail(a.db.pool, email, sub === 'grant' ? 'admin' : 'user');
       if (!ok) {
@@ -369,7 +368,7 @@ async function backupRecord(cfg: Config, args: string[]) {
   const a = newApp(cfg);
   try {
     await insertBackupRun(a.db.pool, {
-      startedAt, fileName: file.slice(0, 255), sizeBytes: size && /^d+$/.test(size) ? Number(size) : null, sha256: sha ?? null,
+      startedAt, fileName: file.slice(0, 255), sizeBytes: size && /^\d+$/.test(size) ? Number(size) : null, sha256: sha ?? null,
       verified: flag(args, 'verified') === 'true', verification: flag(args, 'verification')?.slice(0, 255) ?? null,
       result, error: flag(args, 'error')?.slice(0, 255) ?? null,
     });
