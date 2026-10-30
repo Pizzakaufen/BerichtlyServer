@@ -7,6 +7,7 @@ import { type Database, lockUser, type Queryable } from '../db/pool.ts';
 import * as users from '../db/repositories/users.ts';
 import * as sessions from '../db/repositories/sessions.ts';
 import { findProfile, updateProfile } from '../db/repositories/reports.ts';
+import { exportUserData } from '../db/repositories/privacy.ts';
 import type { Logger } from '../util/logger.ts';
 import { type Json, optString, Validator } from '../validation/validator.ts';
 import { type Principal, validDevice } from './auth.ts';
@@ -35,6 +36,11 @@ export class AccountService {
 
   securityEvents(userId: string, limit: number, offset: number) {
     return sessions.listSecurityEvents(this.db.pool, userId, limit, offset);
+  }
+
+  /** Datenauskunft (seit 2.1): alles, was der Server zu diesem Konto speichert – ohne Passwort- und Token-Hashes. */
+  async export(userId: string) {
+    return { format: 'berichtly-account-export', formatVersion: 1, exportedAt: new Date().toISOString(), ...(await exportUserData(this.db.pool, userId)) };
   }
 }
 

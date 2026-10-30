@@ -63,6 +63,12 @@ export async function purgeSessions(q: Queryable): Promise<number> {
   return r.rowCount ?? 0;
 }
 
+/** Löscht Einträge des Verwaltungsprotokolls nach Ablauf der Aufbewahrungsfrist (seit 2.1). */
+export async function purgeAudit(q: Queryable, olderThanSec: number): Promise<number> {
+  const r = await q.query('DELETE FROM admin_audit_log WHERE created_at < now() - make_interval(secs => $1)', [olderThanSec]);
+  return r.rowCount ?? 0;
+}
+
 // ---------------------------------------------------------------------------
 // Audit-Protokoll
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import { readDailyValues, readMeta, readProfileValues, readWeeklyValues } from '
 import { DEFAULT_PULL_LIMIT, MAX_PULL_LIMIT, parseCursor } from '../services/sync.ts';
 import { type Outcome, requireApplied, type VersionedWriter } from '../services/versioned.ts';
 import { type Json, optInt, optString, Validator } from '../validation/validator.ts';
+import { legalLinks } from './legal.ts';
 import { hashKey } from './limiter.ts';
 import {
   type Page, pageParams, parseIntStrict, pathParam, pathUuid, principal, query, queryInt, readJson, sendData, sendPage,
@@ -30,6 +31,8 @@ export function routesV1(r: RouteHelper, v1: string) {
   r.route('GET', `${v1}/health`, {}, r.system.health);
   r.route('GET', `${v1}/health/live`, {}, r.system.live);
   r.route('GET', `${v1}/health/ready`, {}, r.system.ready);
+  // Vom Betreiber hinterlegte Rechtsseiten (seit 2.1); null, wenn keine hinterlegt sind.
+  r.route('GET', `${v1}/legal`, {}, (_req, reply) => sendData(reply, 200, legalLinks(d.legal)));
 
   // Authentifizierung (eigene, strengere Rate Limits gegen Missbrauch)
   r.route('POST', `${v1}/auth/register`, { limiter: limiters.register }, async (req, reply) => {
@@ -63,6 +66,15 @@ export function routesV1(r: RouteHelper, v1: string) {
   });
   r.route('POST', `${v1}/account/password`, { auth: true, limiter: limiters.login }, async (req, reply) => {
     await d.auth.changePassword(principal(req), readJson(req));
+    reply.code(204).send();
+  });
+  // Datenauskunft und Kontolöschung (seit 2.1)
+  r.route('GET', `${v1}/account/export`, { auth: true, limiter: limiters.refresh }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    sendData(reply, 200, await d.account.export(principal(req).userId));
+  });
+  r.route('DELETE', `${v1}/account`, { auth: true, limiter: limiters.login }, async (req, reply) => {
+    await d.auth.deleteAccount(principal(req), readJson(req));
     reply.code(204).send();
   });
   r.route('GET', `${v1}/account/security-events`, authed, async (req, reply) => {

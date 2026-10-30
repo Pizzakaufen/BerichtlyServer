@@ -7,7 +7,7 @@ import { formatTime, formatTimeOrNull, type IsoWeek, weekContaining } from './da
 export const REPORT_STATUSES = ['DRAFT', 'GENERATED', 'EDITED', 'FINALIZED', 'REVIEW_REQUIRED', 'APPROVED'] as const;
 
 /** Fähigkeiten, die Apps über GET /sync/status erkennen (ältere Server senden keine). */
-export const SERVER_CAPABILITIES = ['REVIEW_STATUS'] as const;
+export const SERVER_CAPABILITIES = ['REVIEW_STATUS', 'ACCOUNT_EXPORT', 'ACCOUNT_DELETION'] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 export const WRITING_STYLES = ['NEUTRAL', 'FORMAL', 'SIMPLE', 'DETAILED'] as const;
 export type WritingStyle = (typeof WRITING_STYLES)[number];

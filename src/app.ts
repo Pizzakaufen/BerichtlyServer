@@ -7,7 +7,8 @@ import { todayIn, weekContaining, weekDays } from './domain/date.ts';
 import { emptyMeta } from './domain/models.ts';
 import { Database } from './db/pool.ts';
 import { type MaintenanceResult, runMaintenance } from './db/repositories/maintenance.ts';
-import { purgeSessions } from './db/repositories/admin.ts';
+import { purgeAudit, purgeSessions } from './db/repositories/admin.ts';
+import { loadLegalDocs } from './http/legal.ts';
 import { buildServer, type Server } from './http/server.ts';
 import { PasswordHasher } from './security/password.ts';
 import { Tokens } from './security/tokens.ts';
@@ -58,6 +59,7 @@ export class App {
       config: this.cfg, db: this.db, log: this.log, auth: this.auth, account: this.account, profiles: this.profiles,
       reports: this.reports, sync: this.sync, devices: this.devices, version: VERSION,
       openapi: this.cfg.apiDocs && existsSync(OPENAPI_FILE) ? readFileSync(OPENAPI_FILE, 'utf8') : null,
+      legal: loadLegalDocs(this.cfg.legal, this.log),
     });
   }
 
@@ -67,13 +69,14 @@ export class App {
     try {
       const res = await runMaintenance(this.db, r);
       const adminSessions = await purgeSessions(this.db.pool).catch(() => 0);
+      const adminAudit = await purgeAudit(this.db.pool, this.cfg.admin.auditRetentionSec).catch(() => 0);
       if (res.skipped) {
         this.log.info('Wartung übersprungen – läuft bereits an anderer Stelle');
       } else {
         this.log.info('Wartung abgeschlossen', {
           tombstones: res.tombstonesPurged, min_valid_cursor: res.minValidCursor, operations: res.operationsPurged,
           security_events: res.securityEventsPurged, sessions: res.sessionsPurged, refresh_tokens: res.refreshTokensPurged,
-          admin_sessions: adminSessions,
+          admin_sessions: adminSessions, admin_audit: adminAudit,
         });
       }
       return res;

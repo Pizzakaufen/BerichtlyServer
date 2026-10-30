@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Berichtly Server API
-  version: 2.0.0
+  version: 2.1.0
   description: |
     REST-API des Berichtly Servers – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App.
 
@@ -79,6 +79,17 @@ tags:
   - { name: Geräte }
 
 paths:
+  /api/v1/legal:
+    get:
+      tags: [System]
+      summary: Vom Betreiber hinterlegte Rechtsseiten (2.1)
+      description: >-
+        Pfade zu Impressum und Datenschutzhinweisen, sofern der Betreiber sie über LEGAL_IMPRINT_FILE bzw.
+        LEGAL_PRIVACY_FILE hinterlegt hat; sonst null. Die Seiten selbst liegen unter /legal/impressum und /legal/datenschutz.
+      security: []
+      responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "200": { description: Rechtsseiten, content: { application/json: { schema: { type: object } } } }
   /api/v1/health:
     get:
       tags: [System]
@@ -198,6 +209,44 @@ paths:
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "200": { description: Konto, content: { application/json: { schema: { $ref: "#/components/schemas/AccountEnvelope" } } } }
         "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Konto]
+      summary: Eigenes Konto mit allen Daten löschen (2.1)
+      description: >-
+        Löscht Konto, Profil, Tages- und Wochenberichte, Geräte, Sitzungen, Tokens und Sicherheitsereignisse endgültig.
+        Verlangt das aktuelle Passwort und confirm = "DELETE". Administratorkonten werden abgelehnt (409), bis die Rolle per CLI
+        entzogen ist. Bereits erstellte Datenbank-Backups enthalten die Daten bis zu ihrer Löschung nach der Aufbewahrungsfrist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, confirm]
+              properties:
+                password: { type: string, maxLength: 128 }
+                confirm: { type: string, enum: [DELETE] }
+      responses:
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "204": { description: Gelöscht }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/account/export:
+    get:
+      tags: [Konto]
+      summary: Datenauskunft – alle zum Konto gespeicherten Daten als JSON (2.1)
+      description: >-
+        Konto (ohne Passwort-Hash), Profil, alle Tages- und Wochenberichte inklusive gelöschter Einträge (Tombstones),
+        Geräte, Sitzungsmetadaten (ohne Tokens) und Sicherheitsereignisse. Antwort mit Cache-Control no-store. Rate-limitiert.
+      responses:
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "200": { description: Export, content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/account/password:
     post:
       tags: [Konto]

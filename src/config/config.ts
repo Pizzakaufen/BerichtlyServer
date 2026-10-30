@@ -65,7 +65,9 @@ export interface Config {
   apiDocs: boolean;
   status: { internalToken: string; minFreeDiskMb: number };
   /** Admin-Dashboard (seit 2.0): standardmäßig aus; Rechte nur per CLI. */
-  admin: { enabled: boolean; sessionIdleSec: number; sessionMaxSec: number; cookieSecure: boolean; loginPerMinute: number; backupDir: string };
+  admin: { enabled: boolean; sessionIdleSec: number; sessionMaxSec: number; cookieSecure: boolean; loginPerMinute: number; backupDir: string; auditRetentionSec: number };
+  /** Vom Betreiber selbst verfasste Rechtsseiten (seit 2.1), als Textdateien; ohne Angabe gibt es keine Seite. */
+  legal: { imprintFile?: string; privacyFile?: string };
 }
 
 const DAY = 86_400;
@@ -210,8 +212,15 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       cookieSecure: prod ? true : r.bool('ADMIN_COOKIE_SECURE', true),
       loginPerMinute: r.int('RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE', 5, 1, 100),
       backupDir: r.str('BACKUP_DIR', '/var/backups/berichtly'),
+      auditRetentionSec: r.int('ADMIN_AUDIT_RETENTION_DAYS', 365, 30, 3650) * DAY,
     },
+    legal: {},
   };
+  for (const key of ['LEGAL_IMPRINT_FILE', 'LEGAL_PRIVACY_FILE']) {
+    const path = r.optional(key);
+    if (path && !path.startsWith('/')) r.fail(`${key} muss ein absoluter Pfad sein`);
+  }
+  config.legal = { imprintFile: r.optional('LEGAL_IMPRINT_FILE'), privacyFile: r.optional('LEGAL_PRIVACY_FILE') };
   if (r.errors.length > 0) throw new ConfigError(`Konfigurationsfehler:\n  - ${r.errors.join('\n  - ')}`);
   return config;
 }
@@ -233,6 +242,8 @@ export function summary(c: Config): string {
     `Status:     ${c.status.internalToken ? 'aktiviert (Token gesetzt)' : '<deaktiviert>'}`,
     `Admin:      ${c.admin.enabled ? `aktiviert (/admin, Sitzung ${c.admin.sessionIdleSec / 60} min Leerlauf, max. ${c.admin.sessionMaxSec / 3600} h, Cookie Secure=${c.admin.cookieSecure})` : '<deaktiviert>'}`,
     `Backups:    ${c.admin.backupDir}`,
+    `Admin-Protokoll: Aufbewahrung ${days(c.admin.auditRetentionSec)}`,
+    `Rechtsseiten: Impressum ${c.legal.imprintFile ?? '<keines>'}, Datenschutz ${c.legal.privacyFile ?? '<keine>'}`,
   ].join('\n');
 }
 

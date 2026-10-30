@@ -138,7 +138,7 @@ describe('Synchronisierung', needsDb, () => {
     const e = await newEnv();
     const tok = (await e.register()).access;
     const st = (await e.get('/api/v1/sync/status', tok)).expect(200);
-    assert.deepEqual(st.data.capabilities, ['REVIEW_STATUS']);
+    assert.deepEqual(st.data.capabilities, ['REVIEW_STATUS', 'ACCOUNT_EXPORT', 'ACCOUNT_DELETION']);
 
     const day = uuid();
     const week = uuid();

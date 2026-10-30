@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.1.0 – 2026-10-29
+
+Datenschutz, Barrierefreiheit und Transparenz. Migration: **keine** (Schema unverändert, 0005). API `/api/v1` bleibt
+rückwärtskompatibel; drei Endpunkte kommen hinzu (42 statt 39).
+
+> **Teststand:** geschrieben, aber in der Entwicklungsumgebung **nicht ausgeführt** (kein Node.js/PostgreSQL). Neue
+> Tests: `test/unit/privacy.test.ts`, `test/integration/privacy.test.ts`. Vor dem Einsatz `npm run typecheck` und
+> `npm test` ausführen.
+
+### Datenschutz
+- `GET /api/v1/account/export`: Datenauskunft als JSON (Konto ohne Passwort-Hash, Profil, alle Berichte, Geräte,
+  Sitzungsmetadaten ohne Tokens, Sicherheitsereignisse).
+- `DELETE /api/v1/account`: Konto mit allen Daten löschen, nur mit Passwort und `confirm: "DELETE"`; Administrator-
+  konten werden abgelehnt (409). Neue Fähigkeiten `ACCOUNT_EXPORT`, `ACCOUNT_DELETION` in `/sync/status`.
+- Verwaltungsprotokoll mit Aufbewahrungsfrist `ADMIN_AUDIT_RETENTION_DAYS` (Standard 365); bisher unbegrenzt.
+- `/api/docs` lädt Swagger UI nicht mehr von `unpkg.com` (Drittanbieter-Verbindung entfernt); die Seite verweist auf
+  `/api/openapi.yaml`.
+- Neue Dokumentation: `docs/PRIVACY.md` (Datenflüsse, Fristen, Cookies, Begründung ohne Cookie-Banner) und
+  `docs/LEGAL.md` (Entscheidungshilfe, offene Betreiberangaben – Entwurf).
+
+### Rechtsseiten (optional)
+- `LEGAL_IMPRINT_FILE` / `LEGAL_PRIVACY_FILE`: vom Betreiber verfasste Textdateien unter `/legal/impressum` und
+  `/legal/datenschutz`, `GET /api/v1/legal` liefert die Pfade für die App. Ohne Dateien gibt es keine Seiten und
+  keine Platzhalter. Nginx-Snippet `berichtly-api.conf` leitet `/legal/` weiter.
+
+### Admin-Dashboard: Barrierefreiheit und Kontraste
+- Kontraste nach WCAG 2.2 AA: Schaltflächen im Dunkelmodus (vorher 2,7 : 1), Statusfarben im Hellmodus (vorher
+  2,3–3,6 : 1) und Eingaberahmen (vorher 1,3 : 1) korrigiert; per Unit-Test geprüft.
+- „Zum Inhalt springen“, `aria-current` in der Navigation, `<th scope="col">`, Pflichtfeldhinweise, Fehlermeldung mit
+  `aria-describedby`/`aria-invalid` verknüpft, eindeutige Schaltflächen je Gerät für Screenreader, größere
+  Kontrollkästchen. Hinweis auf das einzige (notwendige) Cookie auf der Anmeldeseite.
+
 ## 2.0.0 – 2026-10-15
 
 Rollen, Admin-Dashboard, Audit- und Backup-Protokoll. **API `/api/v1` unverändert** (39 Endpunkte, gleiche Felder

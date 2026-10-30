@@ -197,12 +197,12 @@ und fehlende oder schwache Secrets verhindern den Start.
 | `RATE_LIMIT_*` | Login, Login pro Konto, Registrierung, Refresh, übrige API |
 | `TOMBSTONE_RETENTION_DAYS`, `SYNC_OPERATION_RETENTION_DAYS`, `SECURITY_EVENT_RETENTION_DAYS`, `SESSION_RETENTION_DAYS`, `MAINTENANCE_INTERVAL_HOURS` | Aufbewahrung und Wartung |
 | `CORS_ALLOWED_ORIGINS` | Leer = CORS aus (die App braucht keins); `*` in Produktion verboten |
-| `LOG_LEVEL`, `LOG_FORMAT`, `API_DOCS_ENABLED`, `INTERNAL_STATUS_TOKEN` | Logging, Swagger UI, interner Status |
+| `LOG_LEVEL`, `LOG_FORMAT`, `API_DOCS_ENABLED`, `INTERNAL_STATUS_TOKEN` | Logging, API-Dokumentation (`/api/docs`), interner Status |
 
 ## API im Überblick
 
 Basis `https://<domain>/api/v1`, JSON, `Authorization: Bearer <accessToken>`. Vollständig in
-[api/openapi.yaml](api/openapi.yaml) (inkl. Betrieb hinter Nginx/HTTPS; Swagger UI unter `/api/docs`, wenn
+[api/openapi.yaml](api/openapi.yaml) (inkl. Betrieb hinter Nginx/HTTPS; Übersichtsseite ohne fremde Skripte unter `/api/docs`, wenn
 `API_DOCS_ENABLED=true`). Ein Test stellt sicher, dass jede Route dokumentiert ist und umgekehrt.
 
 ```

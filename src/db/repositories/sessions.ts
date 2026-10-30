@@ -249,6 +249,7 @@ export const Events = {
   DeviceRevoked: 'DEVICE_REVOKED',
   PasswordChanged: 'PASSWORD_CHANGED',
   PasswordChangeFailed: 'PASSWORD_CHANGE_FAILED',
+  AccountDeletionFailed: 'ACCOUNT_DELETION_FAILED',
 } as const;
 
 export async function recordSecurityEvent(q: Queryable, userId: string | null, type: string, sessionId: string | null,

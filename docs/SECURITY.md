@@ -37,7 +37,7 @@ automatisierte Tests abgesichert (`test/**/*.test.ts`, gegen echte PostgreSQL un
   ein weiterer Proxy oder ein CDN, muss Nginx die echte Client-IP mit dem `realip`-Modul übernehmen.
 - **Parallele Refresh-Anfragen** mit demselben Refresh Token gelten als Wiederverwendung und beenden die Sitzung.
 - **Keine Ende-zu-Ende-Verschlüsselung** der Berichtsinhalte; Transport per HTTPS, Daten im Klartext in PostgreSQL.
-- Swagger UI (nur wenn aktiviert) lädt Skripte von `unpkg.com`; in Produktion standardmäßig aus.
+- `/api/docs` (nur wenn aktiviert) lädt seit 2.1 keine fremden Skripte mehr; früher Swagger UI von `unpkg.com`.
 
 ## Empfohlene Produktionskonfiguration
 

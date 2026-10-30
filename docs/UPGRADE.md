@@ -1,11 +1,30 @@
 # Upgrade-Anleitung – Berichtly Server
 
+- [2.0 → 2.1 (Datenschutz, Barrierefreiheit, Rechtsseiten)](#upgrade-auf-21)
 - [1.2.x/1.3 → 2.0 (Admin-Dashboard, Rollen, Backup-Skript)](#upgrade-auf-20)
 - [1.2 → 1.2.1 (Betrieb ohne Domain)](#upgrade-von-12-auf-121)
 - [1.1 → 1.2 (Go → Node.js, Nginx)](#upgrade-von-11-auf-12)
 - [1.0 Alpha → 1.1](#upgrade-von-10-alpha-auf-11)
 
 Vor jedem Upgrade ein Backup erstellen ([BACKUP.md](BACKUP.md)).
+
+## Upgrade auf 2.1
+
+Keine Datenbankmigration. Neue, optionale Einstellungen: `ADMIN_AUDIT_RETENTION_DAYS`, `LEGAL_IMPRINT_FILE`,
+`LEGAL_PRIVACY_FILE` (siehe `.env.example` und [LEGAL.md](LEGAL.md)). Damit `/legal/` von außen erreichbar ist, das
+Nginx-Snippet `berichtly-api.conf` neu kopieren (`sudo deploy/install-nginx.sh` kopiert alle Snippets) und `sudo nginx -t && sudo systemctl
+reload nginx` ausführen.
+
+```bash
+# 1. Backup
+sudo deploy/backup.sh
+
+# 2. Installationsbefehl erneut ausführen (lädt 2.1 und startet neu)
+
+# 3. Prüfen: lädt alle Module (Syntax) und zeigt die Version
+berichtly-server version                       # erwartet: 2.1.0
+berichtly-server --env-file /etc/berichtly-server/berichtly-server.env check-config
+```
 
 ## Upgrade auf 2.0
 

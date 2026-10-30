@@ -24,6 +24,7 @@ import { Limiter, Metrics } from './limiter.ts';
 import { JSON_TYPE, sendData, sendError } from './respond.ts';
 import { routesV1 } from './routes-v1.ts';
 import { adminRoutes } from './admin.ts';
+import { type LegalDocs, legalPages } from './legal.ts';
 import { AdminService } from '../services/admin.ts';
 
 export interface Deps {
@@ -38,6 +39,7 @@ export interface Deps {
   devices: DeviceService;
   version: string;
   openapi: string | null; // Inhalt von api/openapi.yaml (nur wenn API_DOCS_ENABLED)
+  legal: LegalDocs; // vom Betreiber hinterlegte Rechtsseiten (seit 2.1)
 }
 
 export interface RouteOptions {
@@ -253,12 +255,15 @@ export async function buildServer(d: Deps): Promise<Server> {
   // Admin-Dashboard (seit 2.0): nur, wenn ausdrücklich aktiviert – sonst existieren die Routen nicht.
   if (cfg.admin.enabled) adminRoutes(app, d, metrics, new AdminService(d.db, cfg, d.auth.hasher, d.log));
 
+  // Rechtsseiten des Betreibers (seit 2.1): nur, wenn als Datei hinterlegt.
+  legalPages(app, d.legal);
+
   // Interner Status (nur mit INTERNAL_STATUS_TOKEN; über Nginx gesperrt) und API-Dokumentation (optional)
   if (cfg.status.internalToken) app.get('/internal/status', internalStatus(d, metrics));
   if (cfg.apiDocs && d.openapi) {
     const spec = d.openapi;
     app.get('/api/openapi.yaml', (_req, reply) => reply.type('application/yaml; charset=utf-8').send(spec));
-    app.get('/api/docs', (_req, reply) => reply.type('text/html; charset=utf-8').send(SWAGGER_PAGE));
+    app.get('/api/docs', (_req, reply) => reply.type('text/html; charset=utf-8').send(DOCS_PAGE));
   }
 
   await app.ready();
@@ -427,18 +432,27 @@ const urlPath = (url: string) => {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Swagger UI lädt der Browser des Entwicklers von unpkg.com; in Produktion ist die Doku standardmäßig aus.
-const SWAGGER_PAGE = `<!DOCTYPE html>
+// API-Dokumentation ohne Drittanbieter (seit 2.1; vorher Swagger UI von unpkg.com): Die Seite lädt nichts von außen
+// und verweist auf die Spezifikation, die sich in einem lokalen Werkzeug (z. B. Swagger Editor, IDE) öffnen lässt.
+const DOCS_PAGE = `<!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="utf-8">
-  <title>Berichtly Server API</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Berichtly Server API</title>
+<style>body{margin:0 auto;max-width:760px;padding:16px;font:16px/1.6 system-ui,sans-serif;color:#151821;background:#f6f7f9}
+a{color:#4a52d6}a:focus-visible{outline:2px solid #4a52d6;outline-offset:2px}
+@media (prefers-color-scheme: dark){body{color:#e7e9ee;background:#0f1115}a{color:#8b93ff}a:focus-visible{outline-color:#8b93ff}}</style>
 </head>
 <body>
-<div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" crossorigin="anonymous"></script>
-<script>window.onload = () => { window.ui = SwaggerUIBundle({ url: "/api/openapi.yaml", dom_id: "#swagger-ui" }); };</script>
+<main>
+<h1>Berichtly Server API</h1>
+<p>Die vollständige Beschreibung aller Endpunkte steht in der OpenAPI-Spezifikation:
+<a href="/api/openapi.yaml">/api/openapi.yaml</a>.</p>
+<p>Zum komfortablen Lesen die Datei in einem lokalen OpenAPI-Werkzeug öffnen (z. B. Swagger Editor als lokale
+Installation oder ein OpenAPI-Plugin der Entwicklungsumgebung). Diese Seite lädt bewusst keine Skripte oder
+Schriften von fremden Servern.</p>
+</main>
 </body>
 </html>`;
 

@@ -106,7 +106,7 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
 
   app.get('/admin/admin.css', (_req, reply) => {
     reply.header('Cache-Control', 'public, max-age=3600');
-    return reply.type('text/css; charset=utf-8').send(CSS);
+    return reply.type('text/css; charset=utf-8').send(ADMIN_CSS);
   });
 
   // --- Anmeldung ------------------------------------------------------------------------------
@@ -204,7 +204,7 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
       ${recent.length === 0 ? '<p class="hint">Noch keine.</p>' : table(['Zeitpunkt', 'Konto', 'Gerät', 'App'], recent.map((x) => [
         fmt(x.lastSuccessAt), `<a href="/admin/users/${x.userId}">${esc(x.email)}</a>`, esc(x.name || x.platform), esc(x.appVersion)]), true)}
       ` : '<p class="bad">Ohne Datenbank sind keine Kennzahlen verfügbar.</p>'}`;
-    return html(reply, dbUp ? 200 : 503, page('Übersicht', p, body));
+    return html(reply, dbUp ? 200 : 503, page('Übersicht', p, body, '/admin'));
   });
 
   // --- Benutzer -------------------------------------------------------------------------------
@@ -231,7 +231,7 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
         ${pageNo > 1 ? `<a href="/admin/users?q=${encodeURIComponent(search)}&page=${pageNo - 1}">← Zurück</a>` : ''}
         ${pageNo < pages ? `<a href="/admin/users?q=${encodeURIComponent(search)}&page=${pageNo + 1}">Weiter →</a>` : ''}
       </nav>`;
-    return html(reply, 200, page('Benutzer', p, body));
+    return html(reply, 200, page('Benutzer', p, body, '/admin/users'));
   });
 
   app.get('/admin/users/:id', async (req, reply) => {
@@ -254,11 +254,11 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
       </dl>
       <h2>Geräte</h2>
       ${devices.length === 0 ? '<p class="hint">Keine Geräte registriert.</p>' : table(
-        ['Gerät', 'App', 'Zuletzt gesehen', 'Synchronisierung', 'Letzter Erfolg', 'Fehlercode', ''],
+        ['Gerät', 'App', 'Zuletzt gesehen', 'Synchronisierung', 'Letzter Erfolg', 'Fehlercode', 'Aktion'],
         devices.map((x) => [
           esc(x.name || x.platform) + (x.revoked ? ' <span class="badge neutral">abgemeldet</span>' : ''), esc(x.appVersion), fmt(x.lastSeenAt),
           syncBadge(x.syncStatus, x.conflicts), fmt(x.lastSuccessAt), esc(x.lastErrorCode ?? '–'),
-          x.revoked ? '' : actionForm(`/admin/users/${id}/devices/${x.ref}/revoke`, p, 'Gerät abmelden', 'Gerät abmelden (Sitzungen beenden, Berichte bleiben erhalten)')]), true)}
+          x.revoked ? '' : actionForm(`/admin/users/${id}/devices/${x.ref}/revoke`, p, 'Gerät abmelden', 'Gerät abmelden (Sitzungen beenden, Berichte bleiben erhalten)', x.name || x.platform)]), true)}
       <h2>Aktionen</h2>
       ${self ? '<p class="hint">Das eigene Konto kann hier nicht gesperrt werden.</p>' : `
         <div class="actions">
@@ -268,7 +268,7 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
           ${actionForm(`/admin/users/${id}/revoke-sessions`, p, 'Alle Sitzungen beenden', 'Alle App-Sitzungen beenden (erneute Anmeldung nötig)')}
         </div>`}
       <p class="hint">Berichtsinhalte werden im Dashboard bewusst nicht angezeigt.</p>`;
-    return html(reply, 200, page(user.email, p, body));
+    return html(reply, 200, page(user.email, p, body, '/admin/users'));
   });
 
   const userAction = (path: string, run: (p: AdminPrincipal, id: string, params: Record<string, string>) => Promise<string | null>) =>
@@ -319,7 +319,7 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
       ${table(['Konto', 'Gerät', 'Status', 'Letzter Erfolg', 'Letzter Fehler', 'Fehlercode', 'App'], rows.map((x) => [
         `<a href="/admin/users/${x.userId}">${esc(x.email)}</a>`, esc(x.name || x.platform), syncBadge(x.syncStatus, x.conflicts),
         fmt(x.lastSuccessAt), fmt(x.lastFailedAt), esc(x.lastErrorCode ?? '–'), esc(x.appVersion)]), true)}`;
-    return html(reply, 200, page('Synchronisierung', p, body));
+    return html(reply, 200, page('Synchronisierung', p, body, '/admin/sync'));
   });
 
   // --- System ---------------------------------------------------------------------------------
@@ -359,7 +359,7 @@ export function adminRoutes(app: FastifyInstance, d: Deps, metrics: Metrics, ser
       <h2>Verwaltungsprotokoll</h2>
       ${audit.length === 0 ? '<p class="hint">Noch keine Einträge.</p>' : table(['Zeitpunkt', 'Admin', 'Aktion', 'Ziel'], audit.map((a) => [
         fmt(a.at), esc(a.admin ?? '–'), esc(a.action), esc(a.target ?? a.targetRef ?? '–')]), true)}`;
-    return html(reply, 200, page('System', p, body));
+    return html(reply, 200, page('System', p, body, '/admin/system'));
   });
 }
 
@@ -374,7 +374,10 @@ export function esc(value: unknown): string {
 
 const fmt = (d: Date | null | undefined) => (d ? esc(d.toISOString().replace('T', ' ').slice(0, 16) + ' UTC') : '–');
 
-function page(title: string, p: AdminPrincipal | null, body: string): string {
+const NAV = [['/admin', 'Übersicht'], ['/admin/users', 'Benutzer'], ['/admin/sync', 'Synchronisierung'], ['/admin/system', 'System']] as const;
+
+/** Seitengerüst; [current] markiert den aktiven Navigationspunkt (aria-current). */
+function page(title: string, p: AdminPrincipal | null, body: string, current?: string): string {
   return `<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -385,17 +388,18 @@ function page(title: string, p: AdminPrincipal | null, body: string): string {
 <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
+<a class="skip" href="#main">Zum Inhalt springen</a>
 <header>
   <div class="brand">BERICHTLY · ADMIN</div>
-  ${p ? `<nav>
-    <a href="/admin">Übersicht</a><a href="/admin/users">Benutzer</a><a href="/admin/sync">Synchronisierung</a><a href="/admin/system">System</a>
+  ${p ? `<nav aria-label="Hauptnavigation">
+    ${NAV.map(([href, label]) => `<a href="${href}"${href === current ? ' aria-current="page"' : ''}>${label}</a>`).join('')}
   </nav>
   <form method="post" action="/admin/logout" class="logout">
     <input type="hidden" name="csrf" value="${esc(p.csrfToken)}">
-    <span>${esc(p.email)}</span><button type="submit">Abmelden</button>
+    <span>Angemeldet als ${esc(p.email)}</span><button type="submit">Abmelden</button>
   </form>` : ''}
 </header>
-<main>
+<main id="main" tabindex="-1">
 <h1>${esc(title)}</h1>
 ${body}
 </main>
@@ -404,16 +408,20 @@ ${body}
 }
 
 function loginPage(error: string | null): string {
+  // Fehler werden mit den Feldern verknüpft (aria-describedby) und sofort angesagt (role="alert").
+  const invalid = error ? ' aria-invalid="true" aria-describedby="login-error"' : '';
   return page('Anmeldung', null, `
-    ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ''}
+    ${error ? `<p class="error" id="login-error" role="alert">${esc(error)}</p>` : ''}
+    <p class="hint">Beide Felder sind Pflichtfelder.</p>
     <form method="post" action="/admin/login" class="login">
-      <label for="email">E-Mail</label>
-      <input id="email" name="email" type="email" autocomplete="username" required maxlength="254">
-      <label for="password">Passwort</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128">
+      <label for="email">E-Mail (Pflichtfeld)</label>
+      <input id="email" name="email" type="email" autocomplete="username" required maxlength="254"${invalid}>
+      <label for="password">Passwort (Pflichtfeld)</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128"${invalid}>
       <button type="submit">Anmelden</button>
     </form>
-    <p class="hint">Nur für Konten mit Administratorrechten. Rechte vergibt der Betreiber per CLI.</p>`);
+    <p class="hint">Nur für Konten mit Administratorrechten. Rechte vergibt der Betreiber per CLI.
+      Das Dashboard setzt ausschließlich ein technisch notwendiges Sitzungs-Cookie (keine Analyse, kein Tracking).</p>`);
 }
 
 function card(title: string, value: string, tone: 'ok' | 'warn' | 'bad' | 'neutral', detail: string): string {
@@ -423,16 +431,18 @@ function card(title: string, value: string, tone: 'ok' | 'warn' | 'bad' | 'neutr
 /** Tabelle; Zellen sind bereits escaptes HTML, wenn [trusted] gesetzt ist. */
 function table(head: string[], rows: string[][], trusted: boolean): string {
   const cell = (c: string) => (trusted ? c : esc(c));
-  return `<div class="table"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${
+  return `<div class="table"><table><thead><tr>${head.map((h) => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${
     rows.length === 0 ? `<tr><td colspan="${head.length}">Keine Einträge.</td></tr>` : rows.map((r) => `<tr>${r.map((c) => `<td>${cell(c)}</td>`).join('')}</tr>`).join('')
   }</tbody></table></div>`;
 }
 
-function actionForm(action: string, p: AdminPrincipal, label: string, confirmText: string): string {
+/** Verändernde Aktion mit Pflicht-Bestätigung; [context] macht gleichlautende Schaltflächen für Screenreader eindeutig. */
+function actionForm(action: string, p: AdminPrincipal, label: string, confirmText: string, context?: string): string {
+  const sr = context ? `<span class="sr"> – ${esc(context)}</span>` : '';
   return `<form method="post" action="${esc(action)}" class="action">
     <input type="hidden" name="csrf" value="${esc(p.csrfToken)}">
-    <label><input type="checkbox" name="confirm" value="yes" required> ${esc(confirmText)}</label>
-    <button type="submit">${esc(label)}</button>
+    <label><input type="checkbox" name="confirm" value="yes" required> ${esc(confirmText)}${sr}</label>
+    <button type="submit">${esc(label)}${sr}</button>
   </form>`;
 }
 
@@ -461,9 +471,10 @@ async function diskFree(path: string): Promise<number> {
   }
 }
 
-const CSS = `
-:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--text:#e7e9ee;--muted:#9aa3b2;--primary:#8b93ff;--ok:#3fb27f;--warn:#e0a03a;--bad:#e5564b}
-@media (prefers-color-scheme: light){:root{--bg:#f6f7f9;--card:#fff;--line:#dfe3ea;--text:#151821;--muted:#5a6273;--primary:#4a52d6}}
+export const ADMIN_CSS = `
+/* Kontraste (2.1, WCAG 2.2 AA): Text ≥ 4,5 : 1 auf --bg und --card, Eingaberahmen (--field) ≥ 3 : 1. */
+:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--field:#6b7385;--text:#e7e9ee;--muted:#9aa3b2;--primary:#8b93ff;--on-primary:#0f1115;--ok:#4cc38a;--warn:#e0a03a;--bad:#f07167}
+@media (prefers-color-scheme: light){:root{--bg:#f6f7f9;--card:#fff;--line:#dfe3ea;--field:#7a8394;--text:#151821;--muted:#5a6273;--primary:#4a52d6;--on-primary:#fff;--ok:#1f7a4d;--warn:#8a5300;--bad:#b3261e}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 header{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line)}
 .brand{font:600 12px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--muted)}
@@ -478,9 +489,13 @@ a{color:var(--primary)}.grid{display:grid;grid-template-columns:repeat(auto-fit,
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--muted);text-transform:uppercase}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;border:1px solid var(--line)}.badge.ok{color:var(--ok)}.badge.warn{color:var(--warn)}.badge.bad{color:var(--bad)}.badge.neutral{color:var(--muted)}
 .hint{color:var(--muted)}.error,.bad{color:var(--bad)}.facts{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px}.facts dt{color:var(--muted)}
-input{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:10px;min-height:44px;font:inherit}
-button{background:var(--primary);color:#fff;border:0;border-radius:6px;padding:10px 16px;min-height:44px;font:inherit;cursor:pointer}
-button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+input{background:var(--bg);color:var(--text);border:1px solid var(--field);border-radius:6px;padding:10px;min-height:44px;font:inherit}
+button{background:var(--primary);color:var(--on-primary);border:0;border-radius:6px;padding:10px 16px;min-height:44px;font:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible,main:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.skip{position:absolute;left:8px;top:-60px;background:var(--card);color:var(--text);padding:10px 14px;border:2px solid var(--primary);border-radius:6px;z-index:10}.skip:focus{top:8px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+header nav a[aria-current]{background:var(--card);font-weight:600;text-decoration:underline}
+input[type=checkbox]{min-height:0;width:22px;height:22px;margin:0 8px 0 0;vertical-align:middle}.action label{display:flex;align-items:center;min-height:44px}
 .login{display:grid;gap:8px;max-width:360px}.search{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .action{display:grid;gap:6px;margin:6px 0}.actions{display:grid;gap:12px;max-width:520px}.pager{display:flex;gap:16px;margin-top:12px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}

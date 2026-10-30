@@ -15,7 +15,7 @@ const spec = parse(readFileSync(new URL('../../api/openapi.yaml', import.meta.ur
 };
 
 test('Versionsangaben stimmen überein', () => {
-  assert.equal(VERSION, '2.0.0');
+  assert.equal(VERSION, '2.1.0');
   assert.equal(readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim(), VERSION);
   assert.equal(spec.info.version, VERSION);
 });
@@ -30,7 +30,7 @@ test('OpenAPI dokumentiert alle Routen', async () => {
   const server = await app.buildServer();
   try {
     const routes = server.routes.filter((r) => r.url.startsWith('/api/v1/') && r.method !== 'HEAD');
-    assert.equal(routes.length, 39, "v1 hat 39 Endpunkte wie in 1.1");
+    assert.equal(routes.length, 42, 'v1 hat 42 Endpunkte (2.1: Export, Kontolöschung, Rechtsseiten)');
     for (const r of routes) {
       const path = r.url.replace(/:([A-Za-z]+)/g, '{$1}');
       assert.ok(spec.paths[path], `Pfad fehlt in openapi.yaml: ${path}`);

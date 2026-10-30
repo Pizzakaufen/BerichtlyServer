@@ -8,6 +8,7 @@ import { accountDto, type DeviceInfo, type User } from '../domain/models.ts';
 import { type Database, isUniqueViolation, type Queryable } from '../db/pool.ts';
 import * as users from '../db/repositories/users.ts';
 import * as sessions from '../db/repositories/sessions.ts';
+import * as privacy from '../db/repositories/privacy.ts';
 import { insertEmptyProfile } from '../db/repositories/reports.ts';
 import type { PasswordHasher } from '../security/password.ts';
 import { hashRefreshToken, InvalidTokenError, newRefreshToken, type Tokens } from '../security/tokens.ts';
@@ -185,6 +186,31 @@ export class AuthService {
       this.log.info('Passwort geändert, andere Sitzungen widerrufen', { user_id: p.userId, sessions: n });
       await sessions.recordSecurityEvent(c, p.userId, sessions.Events.PasswordChanged, p.sessionId, p.deviceRef);
     });
+  }
+
+
+  /**
+   * Löscht das eigene Konto mit allen Daten (seit 2.1). Verlangt das aktuelle Passwort. Administratoren müssen
+   * zuerst per CLI herabgestuft werden, damit der Server nicht versehentlich ohne Verwaltung bleibt.
+   */
+  async deleteAccount(p: Principal, body: Json) {
+    const v = new Validator();
+    const password = v.text('password', optString(body, 'password'), { max: PASSWORD_MAX, required: true });
+    if (optString(body, 'confirm') !== 'DELETE') v.add('confirm', 'required');
+    v.throwIfInvalid();
+    const user = await users.findUserById(this.db.pool, p.userId);
+    if (!user) throw unauthorized();
+    if (!(await this.hasher.verify(password!, user.passwordHash))) {
+      await this.event(p.userId, sessions.Events.AccountDeletionFailed, p.sessionId, p.deviceRef);
+      throw new ApiError(401, Codes.InvalidCredentials, 'Das Passwort ist falsch.');
+    }
+    await this.db.tx(async (c) => {
+      if ((await privacy.userRole(c, p.userId)) === 'admin') {
+        throw new ApiError(409, Codes.Conflict, 'Administratorkonten können nicht über die App gelöscht werden. Bitte zuerst per CLI die Rolle entziehen.');
+      }
+      await privacy.deleteUser(c, p.userId);
+    });
+    this.log.info('Konto auf Wunsch des Benutzers gelöscht', { user_id: p.userId });
   }
 
   listSessions(userId: string, limit: number, offset: number) {
