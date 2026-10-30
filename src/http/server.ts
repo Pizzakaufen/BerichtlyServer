@@ -25,6 +25,7 @@ import { JSON_TYPE, sendData, sendError } from './respond.ts';
 import { routesV1 } from './routes-v1.ts';
 import { adminRoutes } from './admin.ts';
 import { type LegalDocs, legalPages } from './legal.ts';
+import { webAppRoutes } from './webapp.ts';
 import { AdminService } from '../services/admin.ts';
 
 export interface Deps {
@@ -258,6 +259,9 @@ export async function buildServer(d: Deps): Promise<Server> {
   // Rechtsseiten des Betreibers (seit 2.1): nur, wenn als Datei hinterlegt.
   legalPages(app, d.legal);
 
+  // Weboberfläche für Konten (seit 2.2): nur, wenn ausdrücklich aktiviert.
+  if (cfg.webApp.enabled) webAppRoutes(app, cfg.webApp.dir);
+
   // Interner Status (nur mit INTERNAL_STATUS_TOKEN; über Nginx gesperrt) und API-Dokumentation (optional)
   if (cfg.status.internalToken) app.get('/internal/status', internalStatus(d, metrics));
   if (cfg.apiDocs && d.openapi) {
@@ -432,7 +436,7 @@ const urlPath = (url: string) => {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// API-Dokumentation ohne Drittanbieter (seit 2.1; vorher Swagger UI von unpkg.com): Die Seite lädt nichts von außen
+// API-Dokumentation ohne Drittanbieter (seit 2.1; vorher Swagger UI von einem externen CDN): Die Seite lädt nichts von außen
 // und verweist auf die Spezifikation, die sich in einem lokalen Werkzeug (z. B. Swagger Editor, IDE) öffnen lässt.
 const DOCS_PAGE = `<!DOCTYPE html>
 <html lang="de">

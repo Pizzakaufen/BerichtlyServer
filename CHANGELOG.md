@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.2.0 – 2026-10-30
+
+Optionale Weboberfläche für Konten unter `/app` (Berichtly 4.2). Migration: **keine**. API `/api/v1` unverändert.
+
+### Weboberfläche (`/app`, standardmäßig aus)
+- Neue statische Weboberfläche in `web/`: Start (Begrüßung, Berichte der Woche, Wochenfortschritt, zuletzt bearbeitet),
+  Berichte, Wocheneditor mit echtem Speicherstatus (gespeichert / Speichern läuft / ausstehend / Fehler) und
+  Versionsprüfung, Kalender, PDF-Ansicht (Druck über den Browser), KI-Seite (ehrlich: die KI läuft nur lokal in der
+  App, der Server hat keine), Einstellungen (Hell/Dunkel/System, Profil, Geräte, Datenauskunft, Rechtsseiten).
+- Seitenleiste ab 900 px, darunter Tab-Leiste; Hell- und Dunkelmodus; Kontraste WCAG 2.2 AA per Unit-Test geprüft.
+- Ohne Build-Schritt und ohne neue Abhängigkeiten: ES-Module, keine externen Ressourcen, kein `innerHTML`, eigene
+  CSP (`script-src 'self'`, `style-src 'self'`, `connect-src 'self'`), Tokens nur im `sessionStorage`.
+- Effekte aus **Libraries.dev** (MIT, © 2026 Jakub Antalik): `thinking-orbs` (Geometrie-Engine unverändert,
+  TypeScript-Typen entfernt) und `border-beam` (`generateBeamCSS`). Vanilla-Wrapper in `web/fx.js`, Lizenzen in
+  `web/vendor/*/LICENSE`, Übernahme reproduzierbar mit `scripts/vendor-libraries.mjs`. Animiert wird nur während
+  echter Vorgänge (Anmeldung, Speichern, Laden); bei reduzierter Bewegung stehendes Bild.
+- Aktivierung: `WEB_APP_ENABLED=true` (optional `WEB_APP_DIR`) und Nginx-Snippet `berichtly-web.conf` einbinden.
+  Docker-Image enthält `web/`.
+
+### Admin-Dashboard
+- Farben an das Berichtly-Designsystem 4.2 angepasst (Kobaltblau, Steingrau, Serifenüberschriften); Kontraste
+  weiterhin per Test geprüft.
+
 ## 2.1.0 – 2026-10-29
 
 Datenschutz, Barrierefreiheit und Transparenz. Migration: **keine** (Schema unverändert, 0005). API `/api/v1` bleibt

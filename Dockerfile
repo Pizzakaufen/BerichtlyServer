@@ -25,6 +25,7 @@ COPY package.json package-lock.json ./
 COPY bin ./bin
 COPY src ./src
 COPY api ./api
+COPY web ./web
 # Programmdateien gehören root; der Dienst läuft als unprivilegierter Benutzer "node" (UID 1000) und kann sie
 # nicht verändern.
 USER node

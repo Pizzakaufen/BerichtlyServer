@@ -68,6 +68,8 @@ export interface Config {
   admin: { enabled: boolean; sessionIdleSec: number; sessionMaxSec: number; cookieSecure: boolean; loginPerMinute: number; backupDir: string; auditRetentionSec: number };
   /** Vom Betreiber selbst verfasste Rechtsseiten (seit 2.1), als Textdateien; ohne Angabe gibt es keine Seite. */
   legal: { imprintFile?: string; privacyFile?: string };
+  /** Weboberfläche für Konten unter /app (seit 2.2); standardmäßig aus. */
+  webApp: { enabled: boolean; dir: string };
 }
 
 const DAY = 86_400;
@@ -215,6 +217,10 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       auditRetentionSec: r.int('ADMIN_AUDIT_RETENTION_DAYS', 365, 30, 3650) * DAY,
     },
     legal: {},
+    webApp: {
+      enabled: r.bool('WEB_APP_ENABLED', false),
+      dir: r.str('WEB_APP_DIR', new URL('../../web', import.meta.url).pathname),
+    },
   };
   for (const key of ['LEGAL_IMPRINT_FILE', 'LEGAL_PRIVACY_FILE']) {
     const path = r.optional(key);

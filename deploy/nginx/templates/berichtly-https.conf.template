@@ -55,4 +55,6 @@ server {
     include /etc/nginx/snippets/berichtly-api.conf;
     # Admin-Dashboard (Server 2.0, optional): siehe docs/ADMIN.md
     # include /etc/nginx/snippets/berichtly-admin.conf;
+    # Weboberfläche für Konten (seit 2.2, zusätzlich WEB_APP_ENABLED=true):
+    # include /etc/nginx/snippets/berichtly-web.conf;
 }

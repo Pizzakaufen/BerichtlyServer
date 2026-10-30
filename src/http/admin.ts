@@ -473,24 +473,25 @@ async function diskFree(path: string): Promise<number> {
 
 export const ADMIN_CSS = `
 /* Kontraste (2.1, WCAG 2.2 AA): Text ≥ 4,5 : 1 auf --bg und --card, Eingaberahmen (--field) ≥ 3 : 1. */
-:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--field:#6b7385;--text:#e7e9ee;--muted:#9aa3b2;--primary:#8b93ff;--on-primary:#0f1115;--ok:#4cc38a;--warn:#e0a03a;--bad:#f07167}
-@media (prefers-color-scheme: light){:root{--bg:#f6f7f9;--card:#fff;--line:#dfe3ea;--field:#7a8394;--text:#151821;--muted:#5a6273;--primary:#4a52d6;--on-primary:#fff;--ok:#1f7a4d;--warn:#8a5300;--bad:#b3261e}}
+:root{--bg:#111214;--card:#17181b;--line:#2c2f34;--field:#85868a;--text:#e8e7e3;--muted:#a6a6a2;--primary:#a3b5ff;--on-primary:#10215e;--ok:#8bd3a5;--warn:#f5b36e;--bad:#ffb4ab}
+@media (prefers-color-scheme: light){:root{--bg:#f7f6f3;--card:#fdfcfa;--line:#e0ddd6;--field:#74777b;--text:#1e2024;--muted:#575a60;--primary:#2b48c0;--on-primary:#fff;--ok:#256b43;--warn:#9a4a00;--bad:#b3261e}}
+/* 2.2: Berichtly-Designsystem „Redaktion“ – dieselben Farben wie App und Weboberfläche; Serifentitel, Haarlinien. */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 header{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line)}
-.brand{font:600 12px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--muted)}
+.brand{font:500 20px/1 "Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;color:var(--text)}
 header nav{display:flex;gap:4px;flex-wrap:wrap}header nav a{color:var(--text);text-decoration:none;padding:10px 12px;border-radius:6px}
 header nav a:hover,header nav a:focus{background:var(--card)}.logout{margin-left:auto;display:flex;gap:8px;align-items:center;color:var(--muted)}
-main{max-width:1100px;margin:0 auto;padding:20px}h1{font-size:24px;margin:8px 0 16px}h2{font-size:16px;margin:28px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+main{max-width:1100px;margin:0 auto;padding:20px}h1{font:500 28px/1.2 "Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;margin:8px 0 16px}h2{font-size:15px;margin:28px 0 8px;color:var(--text)}
 a{color:var(--primary)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-bottom:12px}
-.card{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:8px;padding:14px}
-.card.ok{border-left-color:var(--ok)}.card.warn{border-left-color:var(--warn)}.card.bad{border-left-color:var(--bad)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:inset 0 2px 0 var(--line)}
+.card.ok{box-shadow:inset 0 2px 0 var(--ok)}.card.warn{box-shadow:inset 0 2px 0 var(--warn)}.card.bad{box-shadow:inset 0 2px 0 var(--bad)}
 .card-title{color:var(--muted);font-size:13px}.card-value{font-size:20px;font-weight:600;margin:4px 0}.card-detail{color:var(--muted);font-size:13px}
 .table{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--muted);text-transform:uppercase}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;border:1px solid var(--line)}.badge.ok{color:var(--ok)}.badge.warn{color:var(--warn)}.badge.bad{color:var(--bad)}.badge.neutral{color:var(--muted)}
 .hint{color:var(--muted)}.error,.bad{color:var(--bad)}.facts{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px}.facts dt{color:var(--muted)}
 input{background:var(--bg);color:var(--text);border:1px solid var(--field);border-radius:6px;padding:10px;min-height:44px;font:inherit}
-button{background:var(--primary);color:var(--on-primary);border:0;border-radius:6px;padding:10px 16px;min-height:44px;font:inherit;cursor:pointer}
+button{background:var(--primary);color:var(--on-primary);border:0;border-radius:8px;font-weight:600;padding:10px 16px;min-height:44px;font:inherit;cursor:pointer}
 button:focus-visible,a:focus-visible,input:focus-visible,main:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .skip{position:absolute;left:8px;top:-60px;background:var(--card);color:var(--text);padding:10px 14px;border:2px solid var(--primary);border-radius:6px;z-index:10}.skip:focus{top:8px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}

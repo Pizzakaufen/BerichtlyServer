@@ -38,6 +38,7 @@ Android-App ──HTTPS──▶ Nginx (einziger öffentlicher Dienst, Port 443/
 | Synchronisierung | Push + Pull in einem Schritt, Cursor-Pagination, idempotente Operationen (`operationId`), Konflikterkennung ohne Last-Write-Wins, Tombstones, Abschlussmeldung und Status pro Gerät |
 | Sicherheit | Strikte Datentrennung pro Benutzer, Rate Limiting in Nginx und Node.js, Sicherheitsereignisse ohne Inhalte, CORS nur explizit, Security-Header, HTTPS über Nginx |
 | Betrieb | Health/Liveness/Readiness, interner Status, strukturierte JSON-Logs mit durchgehender Request-ID (Nginx → Node.js), automatische Wartung, kontrollierter Shutdown |
+| Weboberfläche (optional, seit 2.2) | `/app`: Berichte, Wocheneditor, Kalender, PDF-Ansicht, Geräte und Einstellungen im Browser – nur über die bestehende API, standardmäßig aus ([docs/WEB.md](docs/WEB.md)) |
 | Auslieferung | systemd-Dienst (Node.js) + Nginx, oder Docker Compose mit drei Diensten (nginx, server, db) |
 
 Der Server benötigt **keine KI** (die KI bleibt in der App) und **keine Cloud-Dienste** (kein Google, kein Firebase,
@@ -198,6 +199,7 @@ und fehlende oder schwache Secrets verhindern den Start.
 | `TOMBSTONE_RETENTION_DAYS`, `SYNC_OPERATION_RETENTION_DAYS`, `SECURITY_EVENT_RETENTION_DAYS`, `SESSION_RETENTION_DAYS`, `MAINTENANCE_INTERVAL_HOURS` | Aufbewahrung und Wartung |
 | `CORS_ALLOWED_ORIGINS` | Leer = CORS aus (die App braucht keins); `*` in Produktion verboten |
 | `LOG_LEVEL`, `LOG_FORMAT`, `API_DOCS_ENABLED`, `INTERNAL_STATUS_TOKEN` | Logging, API-Dokumentation (`/api/docs`), interner Status |
+| `WEB_APP_ENABLED`, `WEB_APP_DIR` | Weboberfläche unter `/app` (Standard aus) |
 
 ## API im Überblick
 

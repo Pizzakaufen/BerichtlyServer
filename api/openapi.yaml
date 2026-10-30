@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Berichtly Server API
-  version: 2.1.0
+  version: 2.2.0
   description: |
     REST-API des Berichtly Servers – Linux-Backend und Synchronisationsplattform für die Berichtly-Android-App.
 

@@ -15,7 +15,7 @@ const spec = parse(readFileSync(new URL('../../api/openapi.yaml', import.meta.ur
 };
 
 test('Versionsangaben stimmen überein', () => {
-  assert.equal(VERSION, '2.1.0');
+  assert.equal(VERSION, '2.2.0');
   assert.equal(readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim(), VERSION);
   assert.equal(spec.info.version, VERSION);
 });
